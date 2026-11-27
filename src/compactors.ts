@@ -1179,6 +1179,7 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
   const text = yield* (yield* FileSystem.FileSystem).readFileString(mark.transcript);
   const lines = Str.split(text, "\n");
   let named = false;
+  let namedIn: string | null = null;
   let markers = 0;
   const commands: Array<{
     readonly at: number;
@@ -1213,6 +1214,7 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
         });
       }
       named = request === mark.id;
+      namedIn = named ? (entry.sessionId ?? null) : null;
       markers += named ? 1 : 0;
       continue;
     }
@@ -1223,7 +1225,8 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
     if (manualBoundary(entry) && writerOf(entry, mark) && epochMs(entry.timestamp) >= since) {
       boundaries.push({
         at,
-        before: named,
+        // WARNING: a marker typed in another conversation never asked for this one's compaction.
+        before: named && namedIn === (entry.sessionId ?? null),
         session: entry.sessionId ?? null,
         uuid: entry.uuid ?? null,
       });
@@ -1231,8 +1234,12 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
   }
   // WARNING: Claude writes the boundary first and re-injects the command inside the record it opens, so only that record's own command can claim it.
   const descended = (from: string | null, ancestor: string | null) => {
-    if (from === null || ancestor === null) {
+    if (ancestor === null) {
       return null;
+    }
+    // WARNING: a row with no parent is the root of its own conversation, so no boundary above it re-injected it.
+    if (from === null) {
+      return false;
     }
     let step: string | null = from;
     for (let taken = 0; step !== null && taken < 4096; taken += 1) {

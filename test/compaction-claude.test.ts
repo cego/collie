@@ -1012,8 +1012,8 @@ test("a transcript that merely mentions the marked request settles nothing", () 
     }),
   ));
 
-const naming = (request: string, at: string) =>
-  `{"type":"user","timestamp":"${at}","sessionId":"s-1","message":{"role":"user","content":"/compact Keep the work in progress, the decisions taken and what is left to do. (collie:${request})"}}`;
+const naming = (request: string, at: string, session = "s-1") =>
+  `{"type":"user","timestamp":"${at}","sessionId":"${session}","message":{"role":"user","content":"/compact Keep the work in progress, the decisions taken and what is left to do. (collie:${request})"}}`;
 
 const boundaryAt = (
   at: string,
@@ -1261,6 +1261,29 @@ test("a boundary another session wrote into the same transcript settles nothing"
       const { due, left } = yield* lostAttempt({
         transcript: (after) => `${naming("req-1", after)}\n${boundaryAt(after, "manual", "s-2")}\n`,
       });
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
+test("a marker typed in another session does not settle a boundary written after it", () =>
+  withLaunch(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostCompletion(
+        (after) => `${naming("req-1", after, "s-2")}\n${boundaryAt(after)}\n`,
+      );
+      expect(due).toBeNull();
+      expect(left).not.toBeNull();
+    }),
+  ));
+
+test("a root command cannot have been re-injected by a boundary that has a lineage", () =>
+  withLaunch(
+    Effect.gen(function* () {
+      const { due, left } = yield* lostCompletion(
+        (after) =>
+          `${boundaryAt(after, "manual", "s-1", "u-a", "u-0")}\n{"type":"user","timestamp":"${after}","sessionId":"s-1","uuid":"u-c","parentUuid":null,"message":{"role":"user","content":"/compact Keep the work in progress, the decisions taken and what is left to do. (collie:req-1)"}}\n`,
+      );
       expect(due).toBeNull();
       expect(left).not.toBeNull();
     }),
