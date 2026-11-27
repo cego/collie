@@ -442,12 +442,13 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       if (instruction === "") {
         return failed("create_task needs an instruction");
       }
-      const project = action.project === undefined ? null : yield* readProject(action.project);
-      if (action.project !== undefined && (project === null || isArchived(project))) {
-        return failed(`no Project ${action.project} here, or it is archived`);
-      }
       const installation = yield* hostInstallation(env.stateDir);
-      const asked = { instruction, label: action.label ?? null, cwd: env.cwd };
+      const asked = {
+        instruction,
+        label: action.label ?? null,
+        cwd: env.cwd,
+        project: action.project ?? null,
+      };
       const made = yield* once(
         env.stateDir,
         {
@@ -455,9 +456,19 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           request: by.requestId,
           ...by,
           asked,
-          result: Schema.Struct({ task: Schema.String }),
+          result: Schema.Union([
+            Schema.Struct({ task: Schema.String }),
+            Schema.Struct({ refused: Schema.String }),
+          ]),
+          // WARNING: a refusal is no answer, so the same request is asked again once the Project is back.
+          settles: (made) => !("refused" in made),
         },
         Effect.gen(function* () {
+          // WARNING: a Project is read only where a Task is new, so a request answered once answers the same after an archive.
+          const project = action.project === undefined ? null : yield* readProject(action.project);
+          if (action.project !== undefined && (project === null || isArchived(project))) {
+            return { refused: `no Project ${action.project} here, or it is archived` };
+          }
           const task = yield* newQueuedTask({ instruction, label: action.label, cwd: env.cwd });
           const filed =
             project === null
@@ -467,6 +478,9 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           return { task: written.id };
         }),
       );
+      if ("refused" in made) {
+        return failed(made.refused);
+      }
       return { state: "applied" as const, note: made.task, task: made.task };
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(reason(cause))))),
   );
@@ -618,6 +632,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           ...by,
           asked: action,
           result: Schema.Struct({ filed: Schema.Array(FilingSchema) }),
+          settles: (answer) => !Arr.some(answer.filed, (one) => one.result === "unavailable"),
         },
         Effect.gen(function* () {
           const filed: Array<Filing> = [];

@@ -4,10 +4,10 @@ import { expect, test } from "bun:test";
 import { Effect, Schema } from "effect";
 import { ProjectView, TaskView } from "../src/board-model";
 import { frontDoor, socketOf } from "../src/host";
-import { stopHost } from "./support/host";
+import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
 import { runEffect } from "./support/effect";
-import { twoMachines } from "./support/peers";
+import { listening, listenerPort, twoMachines } from "./support/peers";
 import type { World } from "./support/world";
 const Board = Schema.Struct({ tasks: Schema.Array(TaskView), projects: Schema.Array(ProjectView) });
 const Something = Schema.Struct({ project: Schema.String });
@@ -320,4 +320,85 @@ test("a Project another Machine owns takes a Task, and an absent or archived one
         }),
       [],
     ),
+  ));
+
+test("a filing that could not reach its Project's owner is filed when the same request is sent again", () =>
+  runEffect(
+    twoMachines(
+      "collie-project-again-",
+      (first, second) =>
+        Effect.gen(function* () {
+          yield* first.lists([second]);
+          expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
+          const payments = yield* projectOf(second.world, "Payments");
+          const owner = Option.getOrThrow(
+            Option.map(
+              Arr.findFirst((yield* boardOf(second.world)).projects, (one) => one.id === payments),
+              (one) => one.installation,
+            ),
+          );
+          const task = yield* taskOf(first.world, "Say a duplicate refunds notice twice");
+          const port = yield* listenerPort(first, second);
+          yield* stopHost(second.world.state);
+          yield* until(
+            () => listening(port),
+            (open) => !open,
+          );
+          const door = yield* frontDoor(socketOf(first.world.state));
+          const asked = {
+            actions: [
+              {
+                kind: "task_file" as const,
+                filings: [{ task, project: { installation: owner, id: payments } }],
+              },
+            ],
+            request: "file-away",
+          };
+          const [away] = yield* door.act(asked);
+          expect(away?.filed?.[0]?.result).toBe("unavailable");
+          expect((yield* cardOf(first.world, task))?.projectId).toBeNull();
+          yield* second.cli(["machine", "list"]);
+          yield* until(
+            () => listening(port),
+            (open) => open,
+          );
+          const [filed] = yield* door.act(asked);
+          expect(filed?.filed?.[0]?.result).toBe("filed");
+          expect((yield* cardOf(first.world, task))?.projectId).toEqual({
+            installation: owner,
+            id: payments,
+          });
+        }),
+      [],
+    ),
+  ));
+
+test("a create request answers the same after its Project is archived, and another Project is another request", () =>
+  proves(
+    "collie-project-create-replay-",
+    (world) =>
+      Effect.gen(function* () {
+        const payments = yield* projectOf(world, "Payments");
+        const platform = yield* projectOf(world, "CEGO Platform");
+        const door = yield* frontDoor(socketOf(world.state));
+        const instruction = "Say a duplicate refunds notice twice";
+        const asked = {
+          actions: [{ kind: "create_task" as const, instruction, project: payments }],
+          request: "create-1",
+        };
+        const [first] = yield* door.act(asked);
+        expect(first?.state).toBe("applied");
+        expect(
+          (yield* collie(world, ["project", "archive", "--project", payments])).envelope.ok,
+        ).toBe(true);
+        const [again] = yield* door.act(asked);
+        expect(again?.task).toBe(first?.task);
+        const [elsewhere] = yield* door.act({
+          actions: [{ kind: "create_task" as const, instruction, project: platform }],
+          request: "create-1",
+        });
+        expect(elsewhere?.state).toBe("failed");
+        expect((yield* projectIn(world, platform))?.tasks).toBe(0);
+      }),
+    [],
   ));

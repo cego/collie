@@ -156,11 +156,12 @@ export const fileTask = (opts: {
           } satisfies Filing;
         }
         const current = membershipOf(task);
-        if (opts.expected !== undefined && opts.expected !== current.seq) {
-          return { task: opts.id, result: "stale", membership: current } satisfies Filing;
-        }
+        // WARNING: a send asked again after it landed finds the Task where it meant it, whatever membership it named.
         if (sameProject(current.project, opts.project)) {
           return { task: opts.id, result: "already", membership: current } satisfies Filing;
+        }
+        if (opts.expected !== undefined && opts.expected !== current.seq) {
+          return { task: opts.id, result: "stale", membership: current } satisfies Filing;
         }
         const next = {
           ...task,

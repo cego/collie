@@ -187,6 +187,43 @@ test("a filing says where each Task is and at which membership, not just how man
     }),
   ));
 
+test("a filing whose Project is away is offered to try again, since its answer is not final", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const { log } = logged();
+      const away: ActionResult = {
+        kind: "task_file",
+        state: "failed",
+        note: "1 filed, 1 unavailable",
+        filed: [
+          {
+            task: "t-1",
+            result: "filed",
+            membership: { project: { installation: "i-pc", id: "p-pay" }, seq: 2 },
+          },
+          { task: "t-2", result: "unavailable", membership: { project: null, seq: 0 } },
+        ],
+      };
+      // WARNING: `TaskFile` never asks to discard the reply, so it is the results, and it calls only `act`.
+      const fake: Partial<Door> = { act: () => Effect.succeed([away] as never) };
+      // WARNING: a `TaskFile` calls only `act`, so a partial Door is all it reaches.
+      const failed = yield* act(
+        { machine, desktop: fake as Door },
+        "file-1",
+        {
+          _tag: "TaskFile",
+          filings: [
+            { task: "t-1", project: { installation: "i-pc", id: "p-pay" }, expected: 1 },
+            { task: "t-2", project: { installation: "i-pc", id: "p-ref" } },
+          ],
+        },
+        log,
+      ).pipe(Effect.flip);
+      expect(failed.reason).toBe("t-1: filed, in p-pay at membership 2; t-2: unavailable");
+      expect(failed.refused).toBeUndefined();
+    }),
+  ));
+
 test("actions.log keeps a JSON line per attempt with ids and kinds only, and starts again past 1 MiB", () =>
   Effect.runPromise(
     Effect.gen(function* () {

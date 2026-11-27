@@ -33,7 +33,7 @@ import { toolNamed } from "../src/tools";
 import { certOf, certificateFor, keyOf, peersOf, relayOf } from "../src/peers";
 import { runEffect } from "./support/effect";
 import { stopHost, until } from "./support/host";
-import { listenerPort, twoMachines } from "./support/peers";
+import { listening, listenerPort, twoMachines } from "./support/peers";
 import type { Side } from "./support/peers";
 import { exec } from "./support/command";
 
@@ -661,16 +661,6 @@ test("a port another process takes before any host starts is never the listener'
       { before: (ports) => Effect.forEach(Rec.values(ports), occupy, { discard: true }) },
     ),
   ));
-
-const listening = (port: string) =>
-  Effect.callback<boolean>((resume) => {
-    const conn = createConnection({ host: "127.0.0.1", port: Number(port) });
-    conn.once("connect", () => {
-      conn.destroy();
-      resume(Effect.succeed(true));
-    });
-    conn.once("error", () => resume(Effect.succeed(false)));
-  });
 
 test("a listener given port 0 keeps the port it got when it opens again, in a later host too, and invitations answer that port", () =>
   runEffect(

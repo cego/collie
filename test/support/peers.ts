@@ -10,6 +10,7 @@ import type { PlatformServices } from "../../src/platform";
 import { Config, Effect, FileSystem, Schema, flow, Result } from "effect";
 import type { Scope } from "effect";
 import { exec } from "./command";
+import { createConnection } from "node:net";
 import { suiteEnv } from "./effect";
 import { armTripwire, untripped } from "./herdr-tripwire";
 import { serveFakeHc } from "./fake-hc";
@@ -51,6 +52,16 @@ export const listenerPort = (dialler: Side, listener: Side) =>
       return yield* Effect.die(new Error(`${dialler.name} has no url for ${listener.name}`));
     }
     return new URL(paired.url).port;
+  });
+
+export const listening = (port: string) =>
+  Effect.callback<boolean>((resume) => {
+    const conn = createConnection({ host: "127.0.0.1", port: Number(port) });
+    conn.once("connect", () => {
+      conn.destroy();
+      resume(Effect.succeed(true));
+    });
+    conn.once("error", () => resume(Effect.succeed(false)));
   });
 
 export const twoMachines = <A, E>(

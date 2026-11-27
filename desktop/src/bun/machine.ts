@@ -1402,6 +1402,7 @@ type Refused =
   | RequestConflict
   | RpcClientError.RpcClientError
   | Unsteered
+  | Unreached
   | Unconfirmed;
 
 const refusal = (request?: string) => (error: Refused) =>
@@ -1417,7 +1418,10 @@ const refusal = (request?: string) => (error: Refused) =>
           ? error.detail
           : error.message,
     step: error._tag === "StaleAct" ? error.step : undefined,
-    refused: error._tag === "Unconfirmed" || error._tag === "RpcClientError" ? undefined : true,
+    refused:
+      error._tag === "Unconfirmed" || error._tag === "RpcClientError" || error._tag === "Unreached"
+        ? undefined
+        : true,
   });
 
 export type Reached = Pick<Doors, "machine" | "desktop">;
@@ -1451,6 +1455,12 @@ const over = <A, R>({ machine }: Reached, call: Effect.Effect<A, Refused, R>, re
 
 interface Unsteered {
   readonly _tag: "Unsteered";
+  readonly message: string;
+}
+
+// WARNING: an entry whose Project could not be reached is worth sending again, so it is no refusal.
+interface Unreached {
+  readonly _tag: "Unreached";
   readonly message: string;
 }
 
@@ -1721,9 +1731,13 @@ export const act = (
         return door.act({ actions: [collieAction(action)], request }).pipe(
           Effect.flatMap(([done]) => {
             const said = filedSaid(done?.filed) || done?.note || "Done";
-            return done?.state === "applied"
-              ? Effect.succeed(said)
-              : Effect.fail<Unsteered>({ _tag: "Unsteered", message: said });
+            if (done?.state === "applied") {
+              return Effect.succeed(said);
+            }
+            const away = Arr.some(done?.filed ?? [], (one) => one.result === "unavailable");
+            return Effect.fail<Unsteered | Unreached>(
+              away ? { _tag: "Unreached", message: said } : { _tag: "Unsteered", message: said },
+            );
           }),
         );
     }

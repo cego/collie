@@ -181,6 +181,8 @@ const recorded = Effect.fn("Audit.recorded")(function* <A, I extends Schema.Json
     readonly reason?: string | undefined;
     readonly asked?: Schema.Json | undefined;
     readonly result: Schema.Codec<A, I>;
+    // WARNING: an answer that is not final is kept nowhere, so the same request is asked again.
+    readonly settles?: (value: A) => boolean | undefined;
   },
   act: Effect.Effect<A, E, R>,
 ) {
@@ -204,6 +206,9 @@ const recorded = Effect.fn("Audit.recorded")(function* <A, I extends Schema.Json
   }
   const requested = yield* nowIso;
   const value = yield* act;
+  if (line.settles !== undefined && !line.settles(value)) {
+    return value;
+  }
   yield* recordAudit(runDir, { ...line, value, requested }).pipe(Effect.orDie);
   return value;
 });
@@ -220,6 +225,7 @@ export const once = Effect.fn("Audit.once")(function* <A, I extends Schema.Json,
     readonly reason?: string | undefined;
     readonly asked?: Schema.Json | undefined;
     readonly result: Schema.Codec<A, I>;
+    readonly settles?: (value: A) => boolean | undefined;
   },
   act: Effect.Effect<A, E, R>,
 ) {
