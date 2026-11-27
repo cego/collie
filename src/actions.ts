@@ -84,7 +84,31 @@ export const ActionSchema = Schema.Union([
     kind: Schema.Literal("create_task"),
     instruction: Schema.String,
     label: Schema.optionalKey(Schema.String),
+    // WARNING: a Task filed as it is queued can be opened on its Project straight away.
+    project: Schema.optionalKey(Schema.String),
   }),
+  Schema.Struct({ kind: Schema.Literal("project_create"), name: Schema.String }),
+  ...Arr.map(
+    ["project_star", "project_unstar", "project_archive", "project_restore"] as const,
+    (kind) => Schema.Struct({ kind: Schema.Literal(kind), project: Schema.String }),
+  ),
+  Schema.Struct({
+    kind: Schema.Literal("task_file"),
+    filings: Schema.Array(
+      Schema.Struct({
+        task: Schema.String,
+        // WARNING: a qualified entry names the owner it is expected on, so a wrong host refuses it.
+        installation: Schema.optionalKey(Schema.String),
+        // WARNING: absent leaves the Task unassigned.
+        project: Schema.optionalKey(Schema.String),
+        // WARNING: the membership the operator saw; a move that names another loses to the one that won.
+        expected: Schema.optionalKey(Schema.Finite),
+      }),
+    ),
+  }),
+  ...Arr.map(["task_follow", "task_unfollow"] as const, (kind) =>
+    Schema.Struct({ kind: Schema.Literal(kind), task: Schema.String }),
+  ),
   Schema.Struct({ kind: Schema.Literal("resume"), run: Schema.String }),
   Schema.Struct({
     kind: Schema.Literal("followup"),

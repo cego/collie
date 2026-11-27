@@ -6,6 +6,7 @@ import { CliConfig, CliError, Command, GlobalFlag } from "effect/cli";
 import { persona } from "./commands/persona";
 import { artefacts, run } from "./commands/run";
 import { task } from "./commands/task";
+import { project } from "./commands/project";
 import { settings } from "./commands/settings";
 import { cleanup } from "./commands/cleanup";
 import { usage } from "./commands/usage";
@@ -36,6 +37,7 @@ export const app = root.pipe(
     run,
     artefacts,
     task,
+    project,
     settings,
     steer,
     confirm,

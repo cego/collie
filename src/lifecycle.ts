@@ -91,6 +91,7 @@ import { nowIso } from "./time";
 import { voiceOf } from "./proposals";
 import type { Asker, ProposalLine } from "./proposals";
 import type { TaskChoice, TaskRecord } from "./task";
+import type { ProjectRecord } from "./project";
 import { encodeApprovedFile, rememberedFile, renderApproved } from "./verify-spec";
 import type { VerifySpec } from "./verify-spec";
 import { projectHere, shell } from "./mr";
@@ -431,6 +432,11 @@ export const hostTasks: (
   env: PluginEnv,
 ) => Effect.Effect<ReadonlyArray<TaskRecord>, HostUnread, Client> = (env) =>
   hostRead(env, (client) => client.tasks());
+
+export const hostProjects: (
+  env: PluginEnv,
+) => Effect.Effect<ReadonlyArray<ProjectRecord>, HostUnread, Client> = (env) =>
+  hostRead(env, (client) => client.projects());
 
 export const hostRegistered: (
   env: PluginEnv,

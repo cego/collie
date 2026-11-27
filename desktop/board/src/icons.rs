@@ -167,3 +167,18 @@ icon!(
     "collie-forward",
     r#"<path d="M6.5 3.5L11 8L6.5 12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#
 );
+icon!(
+    PLUS,
+    "collie-plus",
+    r#"<path d="M8 3.5V12.5M3.5 8H12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/>"#
+);
+icon!(
+    STAR,
+    "collie-star",
+    r#"<path d="M8 2.5L9.7 5.9L13.5 6.4L10.75 9.05L11.4 12.8L8 11L4.6 12.8L5.25 9.05L2.5 6.4L6.3 5.9Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/>"#
+);
+icon!(
+    ARCHIVE,
+    "collie-archive",
+    r#"<rect x="2.5" y="3" width="11" height="2.5" rx="0.75" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M3.5 5.5V12.25C3.5 12.8 3.95 13.25 4.5 13.25H11.5C12.05 13.25 12.5 12.8 12.5 12.25V5.5" stroke="currentColor" stroke-width="1.2" fill="none"/><path d="M6.25 8H9.75" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>"#
+);

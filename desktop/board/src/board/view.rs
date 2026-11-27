@@ -26,7 +26,7 @@ const PAD: f32 = 24.0;
 /// The board with its overlays in the window's own layer.
 pub fn view_in(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
     let board = &app.board;
-    let placed = app.placed();
+    let placed = model::scoped(&app.machines, app.nav.scope.as_ref(), app.following());
     let ids = card_ids(&placed);
     let mrs: HashMap<String, Vec<cards::FlockMr>> = cards::flock_mrs(&placed).into_iter().collect();
     let columns = if board.width > 0.0 {
@@ -170,6 +170,7 @@ pub fn view_in(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         })
         .scroll_anchor()
         .scroll_edge_fade(16.0)
+        .on_scroll_offset(scroll_seen(app))
         .on_layout(|app: &mut App, rect: [f32; 4]| {
             if (app.board.width - rect[2]).abs() > 0.5 {
                 app.board.width = rect[2];
@@ -212,6 +213,14 @@ pub fn view_in(app: &App, k: &Kit, layer: &mut Vec<El>) -> El {
         .child(scroll)
 }
 
+/// Where this scope's board is scrolled to, kept so returning to the scope returns to it.
+fn scroll_seen(app: &App) -> impl Fn(rune::ScrollPos) + 'static {
+    let key = app.view_key();
+    let seen = app.nav.scroll.clone();
+    move |at: rune::ScrollPos| {
+        seen.borrow_mut().insert(key.clone(), at.offset[1]);
+    }
+}
 /// Before the core has said anything: that the board is coming.
 fn connecting_placeholder(app: &App, k: &Kit) -> El {
     col()
@@ -757,7 +766,11 @@ fn card(
         k,
         "state",
         cards::card_state_label(task),
-        if queued { None } else { state_tone(k, &task.state) },
+        if queued {
+            None
+        } else {
+            state_tone(k, &task.state)
+        },
     ));
     if task.unseen == Some(true) {
         status = status.child(

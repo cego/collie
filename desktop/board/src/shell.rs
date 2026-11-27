@@ -8,14 +8,16 @@ mod usage;
 pub use files::shell_quoted;
 pub use usage::{UsageEntry, usage_due, usage_entries};
 
-use crate::board::model::{Section, section_of};
+use crate::board::model::{
+    Ordered, ProjectRow, Scope, Section, needs_of, project_rows, section_of,
+};
 use crate::calls::CallError;
 use crate::pages::usage::Level;
 use crate::{App, board_pane, chat_pane_in, icons, pages};
 use collie_desktop_terminal::view::Keyed;
 use rune::{Cx, El, Icon, Tx, col, row, text};
-use rune_kit::shell::{PaneState, Sidebar, SidebarRow, SplitView, Toolbar};
-use rune_kit::{IconButton, Kit};
+use rune_kit::shell::{PaneState, Sidebar, SidebarHeader, SidebarRow, SplitView, Toolbar};
+use rune_kit::{Button, ButtonVariant, ControlSize, IconButton, Kit};
 use serde_json::{Value, json};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -83,8 +85,29 @@ const CHAT_MAX: f32 = 820.0;
 /// The window the chat leaves to the sidebar and the board: 224 and stable's `boardMin`, 480.
 const CHAT_BESIDE: f32 = 224.0 + 480.0;
 
+/// How one scope of the board is left: whether it shows followed Tasks only, and its chat beside
+/// the board.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScopeView {
+    pub following: bool,
+    pub chat: PaneState,
+}
+impl Default for ScopeView {
+    fn default() -> Self {
+        ScopeView {
+            following: false,
+            chat: default_chat(),
+        }
+    }
+}
 pub struct Nav {
     pub page: Page,
+    /// The Project the board and its chat are scoped to; none is the whole Flock.
+    pub scope: Option<Scope>,
+    /// Each scope's own view, by `Scope::key`; `""` is the Flock's.
+    pub views: Ordered<ScopeView>,
+    /// Where each scope's board was scrolled to, recorded as it scrolls.
+    pub scroll: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<String, f32>>>,
     pub sidebar: PaneState,
     /// The Flock chat's pane, open beside the board until closed or popped out.
     pub chat: PaneState,
@@ -100,12 +123,18 @@ pub struct Nav {
     pub returns_to: Option<Page>,
 }
 
+fn default_chat() -> PaneState {
+    PaneState::new(440.0).range(CHAT_MIN, CHAT_MAX)
+}
 impl Default for Nav {
     fn default() -> Self {
         Nav {
             page: Page::Board,
+            scope: None,
+            views: Ordered::default(),
+            scroll: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
             sidebar: PaneState::new(224.0).range(168.0, 360.0),
-            chat: PaneState::new(440.0).range(CHAT_MIN, CHAT_MAX),
+            chat: default_chat(),
             chat_saved: None,
             usage_asked: None,
             usage_asked_of: Vec::new(),
@@ -116,6 +145,77 @@ impl Default for Nav {
 }
 
 impl App {
+    /// The key of the scope the board is in: `""` for the whole Flock.
+    pub fn view_key(&self) -> String {
+        self.nav.scope.as_ref().map(Scope::key).unwrap_or_default()
+    }
+    fn view_of(&self) -> ScopeView {
+        self.nav
+            .views
+            .get(&self.view_key())
+            .copied()
+            .unwrap_or_default()
+    }
+    pub fn following(&self) -> bool {
+        self.view_of().following
+    }
+    /// Follows Tasks only, or every Task of the scope again.
+    pub fn toggle_following(&mut self) {
+        let key = self.view_key();
+        let mut view = self.view_of();
+        view.following = !view.following;
+        view.chat = self.nav.chat;
+        self.nav.views.set(&key, view);
+    }
+    /// Scopes the board and its chat to `scope`, keeping what the one left had and restoring
+    /// what the one entered had: its Following, its chat, and where its board was scrolled.
+    pub fn open_scope(&mut self, scope: Option<Scope>, tx: &mut Tx) {
+        let leaving = self.view_key();
+        let mut left = self.view_of();
+        left.chat = self.nav.chat;
+        self.nav.views.set(&leaving, left);
+        self.nav.scope = scope;
+        self.nav.page = Page::Board;
+        self.nav.returns_to = None;
+        let entering = self.view_of();
+        self.nav.chat = entering.chat;
+        let scroll = self
+            .nav
+            .scroll
+            .borrow()
+            .get(&self.view_key())
+            .copied()
+            .unwrap_or(0.0);
+        tx.scroll_to_y("board-scroll", scroll);
+    }
+    /// This computer's Machine: the one no route names a target for.
+    pub fn local_installation(&self) -> Option<&str> {
+        self.machines
+            .iter()
+            .find(|shown| shown.machine.target.is_none())
+            .map(|shown| shown.machine.installation.as_str())
+    }
+    /// The Project the board is scoped to, and its owner.
+    pub fn scoped_project(&self) -> Option<(&str, &collie_desktop_protocol::generated::Project)> {
+        let scope = self.nav.scope.as_ref()?;
+        self.machines.iter().find_map(|shown| {
+            if shown.machine.installation != scope.installation {
+                return None;
+            }
+            shown
+                .projects
+                .iter()
+                .find(|project| project.id == scope.id)
+                .map(|project| (scope.installation.as_str(), project))
+        })
+    }
+    /// What the toolbar calls the page: a Project's own name while the board is scoped to it.
+    pub fn title(&self) -> String {
+        match (self.nav.page, self.scoped_project()) {
+            (Page::Board, Some((_, project))) => project.name.clone(),
+            (page, _) => page.title().to_string(),
+        }
+    }
     /// Shows `page`; the Board shows the board itself, leaving any open Run.
     pub fn open_page(&mut self, page: Page) {
         if page == Page::Board {
@@ -192,6 +292,114 @@ impl App {
     }
 }
 
+/// A Project's row: selecting it scopes the board and its chat to it.
+fn project_row(app: &App, row: &ProjectRow<'_>, k: &Kit) -> El {
+    let scope = row.scope();
+    let needs = needs_of(&app.machines, &scope);
+    let mut built = SidebarRow::new(row.project.name.clone())
+        .depth(1)
+        .selected(app.nav.scope.as_ref() == Some(&scope));
+    if needs > 0 {
+        built = built.badge(needs.to_string());
+    }
+    // WARNING: a Machine is only worth naming where the Flock has more than one.
+    if app.machines.len() > 1
+        && let Some(machine) = machine_of(app, row.installation)
+    {
+        built = built.detail(machine.to_string());
+    }
+    built
+        .on_select(move |app: &mut App, tx: &mut Tx| app.open_scope(Some(scope.clone()), tx))
+        .build(k)
+        .key(row.key())
+}
+fn machine_of<'a>(app: &'a App, installation: &str) -> Option<&'a str> {
+    app.machines
+        .iter()
+        .find(|shown| shown.machine.installation == installation)
+        .map(|shown| shown.machine.name.as_str())
+}
+/// What the board's toolbar offers of the scope it is in: Following everywhere, and the Project's
+/// own star and archive where one is selected.
+fn project_controls(app: &App, k: &Kit) -> Vec<El> {
+    let mut controls = vec![
+        Button::new("Following")
+            .variant(if app.following() {
+                ButtonVariant::Contrast
+            } else {
+                ButtonVariant::Ghost
+            })
+            .control_size(ControlSize::Small)
+            .expanded(app.following())
+            .help("Show only the Tasks you follow, in this scope")
+            .on_press(|app: &mut App| app.toggle_following())
+            .build(k)
+            .key("following"),
+    ];
+    controls.push(
+        Button::new("New Project")
+            .icon(&icons::PLUS)
+            .variant(ButtonVariant::Ghost)
+            .control_size(ControlSize::Small)
+            .disabled(app.local_installation().is_none())
+            .help("Create a Project on this computer")
+            .on_press(|app: &mut App| app.new_project())
+            .build(k)
+            .key("new-project"),
+    );
+    let Some((installation, project)) = app.scoped_project() else {
+        return controls;
+    };
+    let (installation, project) = (installation.to_string(), project.id.clone());
+    let owner = installation.clone();
+    let starred = app
+        .scoped_project()
+        .is_some_and(|(_, project)| project.starred);
+    let archived = app
+        .scoped_project()
+        .is_some_and(|(_, project)| project.archived);
+    controls.push(
+        Button::new(if starred { "Unstar" } else { "Star" })
+            .icon(&icons::STAR)
+            .variant(ButtonVariant::Ghost)
+            .control_size(ControlSize::Small)
+            .expanded(starred)
+            .help("Move this Project to the top of the Projects list")
+            .on_press({
+                let project = project.clone();
+                move |app: &mut App| {
+                    app.change_project(
+                        owner.clone(),
+                        project.clone(),
+                        if starred { "unstar" } else { "star" },
+                    )
+                }
+            })
+            .build(k)
+            .key("star-project"),
+    );
+    controls.push(
+        Button::new(if archived { "Restore" } else { "Archive" })
+            .icon(&icons::ARCHIVE)
+            .variant(ButtonVariant::Ghost)
+            .control_size(ControlSize::Small)
+            .help("Put this Project away; its work stays on the global Board")
+            .on_press({
+                let installation = installation.clone();
+                let project = project.clone();
+                move |app: &mut App| {
+                    app.change_project(
+                        installation.clone(),
+                        project.clone(),
+                        if archived { "restore" } else { "archive" },
+                    )
+                }
+            })
+            .build(k)
+            .key("archive-project"),
+    );
+    controls
+}
 fn nav_row(app: &App, page: Page, k: &Kit) -> El {
     let mut row = SidebarRow::new(page.title())
         .icon(page.icon())
@@ -207,9 +415,16 @@ fn nav_row(app: &App, page: Page, k: &Kit) -> El {
             row = row.badge(needs.to_string());
         }
     }
-    row.on_select(move |app: &mut App, _: &mut Tx| app.open_page(page))
-        .build(k)
-        .key(page.key())
+    row.on_select(move |app: &mut App, tx: &mut Tx| {
+        // WARNING: the Board is the whole Flock, so choosing it leaves whatever Project was open.
+        if page == Page::Board {
+            app.open_scope(None, tx);
+            return;
+        }
+        app.open_page(page);
+    })
+    .build(k)
+    .key(page.key())
 }
 
 /// Collie's mark and name over the pages.
@@ -306,6 +521,31 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
     for row in rows {
         sidebar = sidebar.child(row);
     }
+    // WARNING: the rows are the list's own children, so the arrows reach them: only the heading
+    // is grouped, which is what keeps two headings from sharing a sibling key.
+    let (live, archived) = project_rows(&app.machines);
+    sidebar = sidebar.child(
+        col()
+            .key("projects")
+            .role("group")
+            .label("Projects")
+            .w_full()
+            .child(SidebarHeader::new("Projects").build(side)),
+    );
+    for row in &live {
+        sidebar = sidebar.child(project_row(app, row, side));
+    }
+    if !archived.is_empty() {
+        sidebar = sidebar.child(
+            col()
+                .key("projects-archive")
+                .w_full()
+                .child(SidebarHeader::new("Archive").build(side)),
+        );
+        for row in &archived {
+            sidebar = sidebar.child(project_row(app, row, side));
+        }
+    }
     let sidebar = sidebar
         .footer(nav_row(app, Page::Settings, side))
         .build(side);
@@ -344,9 +584,12 @@ pub fn view(app: &App, cx: &mut Cx<App>) -> El {
             chat_pane_in(app, k, &mut layer),
         )
         .toolbar({
-            let mut toolbar = Toolbar::new().title(app.nav.page.title());
+            let mut toolbar = Toolbar::new().title(app.title());
             if let Some(update) = crate::updates::toolbar(app, k) {
                 toolbar = toolbar.trailing(update);
+            }
+            for control in project_controls(app, side) {
+                toolbar = toolbar.trailing(control);
             }
             toolbar.trailing(usage_button(app, k)).trailing(chat_toggle)
         })

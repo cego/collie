@@ -1966,3 +1966,138 @@ fn card_mr_rows_of_one_machines_several_merge_requests_fit_a_narrow_card() {
         }
     }
 }
+
+fn project(id: &str, name: &str, starred: bool, archived: bool) -> Value {
+    json!({"installation": "inst-pc", "id": id, "name": name, "starred": starred,
+        "archived": archived, "tasks": 0.0, "needs": 0.0})
+}
+/// A Machine's board with Projects, as a host that owns some sends it.
+fn snapshot_with(machine: &Value, tasks: Vec<Value>, projects: Vec<Value>) -> Value {
+    json!({"machine": machine, "message": {
+        "_tag": "Snapshot", "installation": machine["installation"], "build": "0.118.0",
+        "protocol": 7, "files": true, "herds": [{"id": "h1"}], "projects": projects,
+        "tasks": tasks, "seq": 1,
+    }})
+}
+fn in_payments(mut card: Value, following: bool) -> Value {
+    card["projectId"] = json!({"installation": "inst-pc", "id": "project-payments"});
+    if following {
+        card["following"] = json!(true);
+    }
+    card
+}
+#[test]
+fn the_sidebar_lists_projects_starred_first_with_what_needs_you_and_settings_still_last() {
+    let harness = Harness::new();
+    let items = vec![snapshot_with(
+        &pc(),
+        vec![
+            in_payments(task("t-1", "Refunds", "blocked", json!({})), false),
+            in_payments(task("t-2", "Payouts", "active", json!({})), true),
+        ],
+        vec![
+            project("project-payments", "Payments", false, false),
+            project("project-cego", "CEGO Platform", true, false),
+            project("project-product", "Product", false, true),
+        ],
+    )];
+    let runtime = runtime_of(&harness, items);
+    let row = |id: &str| node(&runtime, &format!("project-inst-pc-{id}"));
+    assert_eq!(
+        row("project-cego").and_then(|n| n["name"].as_str().map(String::from)),
+        Some("CEGO Platform".to_string())
+    );
+    assert_eq!(
+        row("project-payments").and_then(|n| n["badge"].as_str().map(String::from)),
+        None
+    );
+    assert_eq!(
+        row("project-payments").and_then(|n| n["description"].as_str().map(String::from)),
+        Some("1".to_string())
+    );
+    assert!(
+        row("project-product").is_some(),
+        "an archived Project is still offered"
+    );
+    assert!(
+        node(&runtime, "nav-settings").is_some(),
+        "Settings stays reachable"
+    );
+}
+
+#[test]
+fn selecting_a_project_scopes_the_board_and_its_following_comes_back_with_it() {
+    let harness = Harness::new();
+    let items = vec![snapshot_with(
+        &pc(),
+        vec![
+            in_payments(task("t-1", "Refunds", "active", json!({})), true),
+            in_payments(task("t-2", "Payouts", "active", json!({})), false),
+            task(
+                "t-3",
+                "Elsewhere",
+                "active",
+                json!({"projectId": {"installation": "inst-pc", "id": "project-cego"}}),
+            ),
+        ],
+        vec![
+            project("project-payments", "Payments", false, false),
+            project("project-cego", "CEGO Platform", false, false),
+        ],
+    )];
+    let mut runtime = runtime_of(&harness, items);
+    // The whole Flock, until a Project is chosen.
+    assert_eq!(cards_in(&runtime, "working").len(), 3);
+    press(&mut runtime, "project-inst-pc-project-payments");
+    let mut names = cards_in(&runtime, "working");
+    names.sort();
+    assert_eq!(names, ["Payouts", "Refunds"]);
+    // Following narrows the same board to what the operator follows.
+    press(&mut runtime, "following");
+    assert_eq!(cards_in(&runtime, "working"), ["Refunds"]);
+    // The chat's layout is the scope's too: closed here, open on the Flock, closed again on return.
+    press(&mut runtime, "open-chat");
+    assert!(!runtime.state.nav.chat.is_open());
+    // The Board is one press away, and coming back restores what was left.
+    press(&mut runtime, "nav-board");
+    assert_eq!(cards_in(&runtime, "working").len(), 3);
+    assert!(
+        runtime.state.nav.chat.is_open(),
+        "the Flock keeps its own chat layout"
+    );
+    press(&mut runtime, "project-inst-pc-project-payments");
+    assert_eq!(cards_in(&runtime, "working"), ["Refunds"]);
+    assert!(
+        !runtime.state.nav.chat.is_open(),
+        "the Project's chat layout comes back"
+    );
+}
+#[test]
+fn a_project_is_starred_and_archived_from_its_own_toolbar() {
+    let harness = Harness::new();
+    let items = vec![snapshot_with(
+        &pc(),
+        Vec::new(),
+        vec![project("project-payments", "Payments", false, false)],
+    )];
+    let mut runtime = runtime_of(&harness, items);
+    press(&mut runtime, "project-inst-pc-project-payments");
+    press(&mut runtime, "star-project");
+    press(&mut runtime, "archive-project");
+    let asked: Vec<(String, String)> = acts(&harness)
+        .into_iter()
+        .filter_map(|asked| {
+            Some((
+                asked["action"]["_tag"].as_str()?.to_string(),
+                asked["action"]["project"].as_str()?.to_string(),
+            ))
+        })
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            ("ProjectStar".to_string(), "project-payments".to_string()),
+            ("ProjectArchive".to_string(), "project-payments".to_string()),
+        ]
+    );
+}

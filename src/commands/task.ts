@@ -1,5 +1,7 @@
 import * as Arr from "effect/Array";
 import { Effect } from "effect";
+import type { Mutable } from "effect/Types";
+import type { ActionSchema } from "../actions";
 import { Command, Flag } from "effect/cli";
 import { listRuns } from "../runs";
 import { actAsked, hostTasks } from "../lifecycle";
@@ -45,25 +47,40 @@ const create = Command.make(
       Flag.withDescription("What the board calls it; the first line of the instruction by default"),
       Flag.optional,
     ),
+    project: Flag.String("project").pipe(
+      Flag.withDescription("The Project on this Machine to file it in as it is queued"),
+      Flag.optional,
+    ),
     requestId: requestIdFlag,
   },
-  ({ instruction, label, requestId }) =>
+  ({ instruction, label, project, requestId }) =>
     mutating(
       {
         operation: "create_task",
         run: null,
-        args: { instruction, label: label._tag === "Some" ? label.value : "" },
+        args: {
+          instruction,
+          label: label._tag === "Some" ? label.value : "",
+          project: project._tag === "Some" ? project.value : "",
+        },
       },
       requestId,
       (env, id) =>
         Effect.gen(function* () {
+          // WARNING: an absent key, not a present undefined: the action's JSON refuses undefined where a string is optional.
+          const action: Mutable<Extract<typeof ActionSchema.Encoded, { kind: "create_task" }>> = {
+            kind: "create_task",
+            instruction,
+          };
+          if (label._tag === "Some") {
+            action.label = label.value;
+          }
+          if (project._tag === "Some") {
+            action.project = project.value;
+          }
           const [done] = yield* actAsked(env, {
             door: yield* cliDoor(env),
-            actions: [
-              label._tag === "Some"
-                ? { kind: "create_task" as const, instruction, label: label.value }
-                : { kind: "create_task" as const, instruction },
-            ],
+            actions: [action],
             request: id,
           });
           if (done === undefined || done.state !== "applied" || done.task === undefined) {
@@ -78,7 +95,104 @@ const create = Command.make(
     ),
 ).pipe(Command.withDescription("Queue a Task from one instruction, before any Run exists"));
 
+const file = Command.make(
+  "file",
+  {
+    task: Flag.String("task").pipe(Flag.withDescription("The Task's id, as `task list` prints it")),
+    project: Flag.String("project").pipe(
+      Flag.withDescription("The Project on this Machine to file it in"),
+      Flag.optional,
+    ),
+    expected: Flag.Int("expected").pipe(
+      Flag.withDescription(
+        "The membership to move from, as the board showed it; a filing that names another is refused",
+      ),
+      Flag.optional,
+    ),
+    requestId: requestIdFlag,
+  },
+  ({ task, project, expected, requestId }) =>
+    mutating(
+      {
+        operation: "task_file",
+        run: null,
+        args: { task, project: project._tag === "Some" ? project.value : "" },
+      },
+      requestId,
+      (env, id) =>
+        Effect.gen(function* () {
+          // WARNING: an absent key, not a present undefined: the action's JSON refuses undefined where a string is optional.
+          const filing: Mutable<
+            Extract<typeof ActionSchema.Encoded, { kind: "task_file" }>["filings"][number]
+          > = { task };
+          if (project._tag === "Some") {
+            filing.project = project.value;
+          }
+          if (expected._tag === "Some") {
+            filing.expected = expected.value;
+          }
+          const [done] = yield* actAsked(env, {
+            door: yield* cliDoor(env),
+            actions: [{ kind: "task_file", filings: [filing] }],
+            request: id,
+          });
+          const filed = done?.filed?.[0];
+          if (done === undefined || filed === undefined) {
+            return err("operation_failed", done?.note || "The host did not file the Task.");
+          }
+          const landed = filed.result === "filed" || filed.result === "already";
+          const human = landed
+            ? `${task}: ${filed.result}${filed.membership.project === null ? " unassigned" : ` in ${filed.membership.project.id}`} (membership ${filed.membership.seq})`
+            : `${task}: ${filed.result}${filed.result === "stale" ? `; it is in ${filed.membership.project?.id ?? "no Project"} (membership ${filed.membership.seq}), so read the board and file it again` : ""}`;
+          return landed
+            ? {
+                ok: true as const,
+                data: { task, result: filed.result, membership: filed.membership },
+                human,
+              }
+            : err("operation_failed", human, {
+                task,
+                result: filed.result,
+                membership: filed.membership,
+              });
+        }),
+    ),
+).pipe(
+  Command.withDescription(
+    "File a Task into a Project on this Machine, or move it, or leave it unassigned",
+  ),
+);
+const follow = (kind: "task_follow" | "task_unfollow", said: string) =>
+  Command.make(
+    said,
+    {
+      task: Flag.String("task").pipe(
+        Flag.withDescription("The Task's id, as `task list` prints it"),
+      ),
+      requestId: requestIdFlag,
+    },
+    ({ task, requestId }) =>
+      mutating({ operation: kind, run: null, args: { task } }, requestId, (env, id) =>
+        Effect.gen(function* () {
+          const [done] = yield* actAsked(env, {
+            door: yield* cliDoor(env),
+            actions: [{ kind, task }],
+            request: id,
+          });
+          if (done === undefined || done.state !== "applied") {
+            return err("operation_failed", done?.note || `The host did not ${said} it.`);
+          }
+          return { ok: true as const, data: { task }, human: done.note };
+        }),
+      ),
+  ).pipe(Command.withDescription(`Stop or start keeping a Task in view (${said})`));
 export const task = Command.make("task").pipe(
   Command.withDescription("The Tasks a Run can be started into"),
-  Command.withSubcommands([list, create]),
+  Command.withSubcommands([
+    list,
+    create,
+    file,
+    follow("task_follow", "follow"),
+    follow("task_unfollow", "unfollow"),
+  ]),
 );

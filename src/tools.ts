@@ -454,7 +454,19 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
   if (actions.length === 0) {
     return "collie_do needs an action. Ask which one they meant.";
   }
-  const asked: ReadonlySet<string> = new Set([...ASKED_KINDS, ...SETTLE_KINDS, "create_task"]);
+  const asked: ReadonlySet<string> = new Set([
+    ...ASKED_KINDS,
+    ...SETTLE_KINDS,
+    "create_task",
+    "project_create",
+    "project_star",
+    "project_unstar",
+    "project_archive",
+    "project_restore",
+    "task_file",
+    "task_follow",
+    "task_unfollow",
+  ]);
   const wrong = Arr.filter(actions, (action) => !asked.has(action.kind));
   if (wrong.length > 0) {
     return `collie_do does not carry out ${Arr.join([...new Set(Arr.map(wrong, (a) => a.kind))], ", ")}: that is collie_propose's, which carries it out in the same call.`;

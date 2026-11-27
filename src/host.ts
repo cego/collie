@@ -234,8 +234,17 @@ import {
   Started,
   SteerOutcome,
   Attachments,
+  projectViews,
 } from "./board-model";
-import type { RunRevision, Toasted, FrontDoor, OfferView, TaskView, Where } from "./board-model";
+import type {
+  RunRevision,
+  Toasted,
+  FrontDoor,
+  OfferView,
+  ProjectView,
+  TaskView,
+  Where,
+} from "./board-model";
 import {
   attachedLine,
   attachmentRefusal,
@@ -293,6 +302,14 @@ import { retitleGenericTasks } from "./tasknames";
 import { VerifySpecSchema } from "./verify-spec";
 import { AgentEntrySchema, everyRegistered, REGISTERED } from "./registry";
 import { listTasks, readTask, TASKS, TaskSchema } from "./task";
+import {
+  hostInstallation,
+  isArchived,
+  isStarred,
+  listProjects,
+  ProjectSchema,
+  PROJECTS,
+} from "./project";
 import { epochMs, nowIso } from "./time";
 import { appendLog } from "./oversight";
 import { decodeVerifying, VERIFYING, verifyingOf } from "./verify";
@@ -545,6 +562,7 @@ export const HostRpcs = RpcGroup.make(
   }),
   Rpc.make("overridden", { success: Schema.Array(Schema.String) }),
   Rpc.make("tasks", { success: Schema.Array(TaskSchema) }),
+  Rpc.make("projects", { success: Schema.Array(ProjectSchema) }),
   Rpc.make("proposals", {
     payload: { herd: Schema.String },
     success: Schema.Array(ProposalLineSchema),
@@ -1093,6 +1111,7 @@ const handlers = (
           }),
         overridden: () => Effect.map(overriddenRuns, (runs) => [...runs]),
         tasks: () => listTasks,
+        projects: () => listProjects,
         registered: () => everyRegistered,
         launches: ({ run }) => readLaunches(run),
         proposals: ({ herd }) => readProposals(herd),
@@ -1363,7 +1382,19 @@ class SteerUnanswered extends Schema.TaggedError<
   outcome: SteerOutcome,
 }) {}
 
-const ACTED_KINDS = new Set<string>([...ASKED_KINDS, "hold", "create_task"]);
+const ACTED_KINDS = new Set<string>([
+  ...ASKED_KINDS,
+  "hold",
+  "create_task",
+  "project_create",
+  "project_star",
+  "project_unstar",
+  "project_archive",
+  "project_restore",
+  "task_file",
+  "task_follow",
+  "task_unfollow",
+]);
 const ACT_REVISIONS_KEPT = 1024;
 
 const outcomeOf: (result: OpResult) => SteerOutcome = (result) =>
@@ -1451,6 +1482,25 @@ const hostBoard = (dir: string) =>
       return made;
     };
     const runs = registry.views(null, model?.reading, kept).pipe(Effect.map(Arr.map(factsOf)));
+    // WARNING: read with each board, so a star or an archive reaches the sidebar by itself.
+    const projectsOf = (views: ReadonlyArray<TaskView>) =>
+      Effect.gen(function* () {
+        const installation = yield* hostInstallation(env.stateDir);
+        if (installation === null) {
+          return [];
+        }
+        const projects = yield* listProjects;
+        return projectViews({
+          installation,
+          projects: Arr.map(projects, (one) => ({
+            id: one.id,
+            name: one.name,
+            starred: isStarred(one),
+            archived: isArchived(one),
+          })),
+          views,
+        });
+      });
     const idle: IdleSince = new Map();
     const finishedSince: FinishedSince = new Map();
     const cards: KeptCards | undefined =
@@ -1613,7 +1663,8 @@ const hostBoard = (dir: string) =>
           yield* model.observe(facts);
         }
         const views = yield* boardOf(facts, alive);
-        return { runs: facts, views, alive };
+        const projects = yield* projectsOf(views).pipe(Effect.provideContext(bun));
+        return { runs: facts, views, alive, projects };
       });
     let filled = false;
     const listing = Effect.gen(function* () {
@@ -1759,6 +1810,7 @@ const hostBoard = (dir: string) =>
       bun,
       listing,
       projected: () => projected,
+      projectsOf,
       // WARNING: read on the forge syncer's next round, however recently it last read them.
       nudged: new Set<string>(),
       recover: (runId: string) => registry.syncRecovery(runId).pipe(Effect.provideContext(hosted)),
@@ -1803,8 +1855,10 @@ class SharedBoard extends Context.Service<
       readonly runs: ReadonlyArray<RunFacts>;
       readonly views: ReadonlyArray<TaskView>;
       readonly alive: ReadonlyArray<AgentInfo>;
+      readonly projects: ReadonlyArray<ProjectView>;
     }>;
     readonly listed: Effect.Success<ReturnType<typeof hostBoard>>["sweepers"];
+    readonly projectsOf: Effect.Success<ReturnType<typeof hostBoard>>["projectsOf"];
   }
 >()("collie/SharedBoard") {}
 
@@ -1817,6 +1871,7 @@ export const boardTableWrites = Stream.unwrap(
         PROPOSALS,
         REGISTERED,
         TASKS,
+        PROJECTS,
         RUN_RECORDS,
         MERGE_REQUESTS,
         MODULE_REVISIONS,
@@ -2173,11 +2228,24 @@ export const frontDoorHandlers = (
       const offerShared = Effect.asVoid(Effect.forkIn(userDirMoved, layerScope));
       const hosted = yield* Effect.context<HostServices>();
       const reliance = yield* Reliance;
-      const { env, herdr, bun, sweepers, listed, changed, writes, projected, nudged, ...shared } =
-        yield* SharedBoard;
+      const {
+        env,
+        herdr,
+        bun,
+        sweepers,
+        listed,
+        changed,
+        writes,
+        projected,
+        projectsOf,
+        nudged,
+        ...shared
+      } = yield* SharedBoard;
       const collecting = yield* Collecting;
       const forgeHttp = yield* ForgeHttp;
-      const boards = shared.boards.pipe(Stream.map((built) => built.views));
+      const boards = shared.boards.pipe(
+        Stream.map((built) => ({ tasks: built.views, projects: built.projects })),
+      );
       const usage = yield* Usage;
       const harnesses = yield* HarnessCatalogues;
       const schedules = yield* Schedules;
@@ -2663,7 +2731,10 @@ export const frontDoorHandlers = (
           if (view === null) {
             return null;
           }
-          const board = Option.getOrElse(yield* Stream.runHead(boards), () => []);
+          const board = Option.getOrElse(yield* Stream.runHead(boards), () => ({
+            tasks: [],
+            projects: [],
+          })).tasks;
           const card = Option.getOrUndefined(
             Arr.findFirst(board, (one) => one.runs.includes(runId)),
           );
@@ -4600,9 +4671,13 @@ export const frontDoorHandlers = (
                     ),
                   },
                   boards: Stream.unwrap(
-                    Effect.sync(() => {
+                    Effect.gen(function* () {
                       const first = projected();
-                      return first === null ? boards : Stream.concat(Stream.make(first), boards);
+                      if (first === null) {
+                        return boards;
+                      }
+                      const projects = yield* projectsOf(first).pipe(Effect.provideContext(bun));
+                      return Stream.concat(Stream.make({ tasks: first, projects }), boards);
                     }),
                   ),
                 }),

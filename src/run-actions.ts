@@ -37,7 +37,27 @@ import { humanBytes } from "./bytes";
 import { agentStartRefusal, CHAT_CHECKOUT_FIX } from "./agent-start";
 import { RESERVED_INPUTS } from "./sdk";
 import { PROJECTS_ROOT_OPTION, projectsRoot, repositoryCheckout } from "./projects";
-import { isOpen, listTasks, newQueuedTask, readTask, removeTask, writeTask } from "./task";
+import {
+  fileTask,
+  followTask,
+  isOpen,
+  listTasks,
+  newQueuedTask,
+  readTask,
+  removeTask,
+  unfollowTask,
+  writeTask,
+} from "./task";
+import type { Filing } from "./task";
+import {
+  hostInstallation,
+  isArchived,
+  newProject,
+  readProject,
+  withProjectLock,
+  writeProject,
+} from "./project";
+import type { ProjectRecord } from "./project";
 import { clearOverride, collieOwnRefusal, err, workspaceNamed } from "./operations";
 import type { Failure, OpResult } from "./operations";
 import { Herdr } from "./herdr";
@@ -78,7 +98,7 @@ import {
 import type { Actor, ProposalRecord } from "./proposals";
 import type { Action } from "./actions";
 import { ProposalRefused } from "./board-model";
-import type { ActionResult, ProposalCarried, StepResult } from "./board-model";
+import type { ProposalCarried, StepResult } from "./board-model";
 import { fingerprint } from "./verify";
 import { findRun } from "./runs";
 
@@ -419,6 +439,11 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
       if (instruction === "") {
         return failed("create_task needs an instruction");
       }
+      const project = action.project === undefined ? null : yield* readProject(action.project);
+      if (action.project !== undefined && (project === null || isArchived(project))) {
+        return failed(`no Project ${action.project} here, or it is archived`);
+      }
+      const installation = yield* hostInstallation(env.stateDir);
       const asked = { instruction, label: action.label ?? null, cwd: env.cwd };
       const made = yield* once(
         env.stateDir,
@@ -431,13 +456,184 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         },
         Effect.gen(function* () {
           const task = yield* newQueuedTask({ instruction, label: action.label, cwd: env.cwd });
-          const written = yield* writeTask(task);
+          const filed =
+            project === null
+              ? task
+              : { ...task, project: { installation: installation ?? "", id: project.id } };
+          const written = yield* writeTask(filed);
           return { task: written.id };
         }),
       );
       return { state: "applied" as const, note: made.task, task: made.task };
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(reason(cause))))),
   );
+  registerExecutor("project_create", (action, by, env) =>
+    Effect.gen(function* () {
+      const name = Str.trim(action.name);
+      if (name === "") {
+        return failed("project_create needs a name");
+      }
+      const made = yield* once(
+        env.stateDir,
+        {
+          operation: "project_create",
+          request: by.requestId,
+          ...by,
+          asked: { name },
+          result: Schema.Struct({ project: Schema.String }),
+        },
+        Effect.gen(function* () {
+          const written = yield* writeProject(yield* newProject({ name }));
+          return { project: written.id };
+        }),
+      );
+      return {
+        state: "applied" as const,
+        note: `${made.project} "${name}"`,
+        project: made.project,
+      };
+    }).pipe(Effect.catch((cause) => Effect.succeed(failed(reason(cause))))),
+  );
+  // WARNING: an absent key, not a present undefined: a Project's JSON refuses undefined where a time is optional.
+  const projectTimes = (
+    project: { readonly id: string; readonly name: string; readonly created_at: string },
+    times: { readonly starred_at?: string | undefined; readonly archived_at?: string | undefined },
+  ) => {
+    const { id, name, created_at } = project;
+    if (times.starred_at !== undefined && times.archived_at !== undefined) {
+      const both: ProjectRecord = {
+        id,
+        name,
+        created_at,
+        starred_at: times.starred_at,
+        archived_at: times.archived_at,
+      };
+      return both;
+    }
+    if (times.starred_at !== undefined) {
+      const starred: ProjectRecord = { id, name, created_at, starred_at: times.starred_at };
+      return starred;
+    }
+    if (times.archived_at !== undefined) {
+      const archived: ProjectRecord = { id, name, created_at, archived_at: times.archived_at };
+      return archived;
+    }
+    const bare: ProjectRecord = { id, name, created_at };
+    return bare;
+  };
+  const projectChange = (
+    kind: "project_star" | "project_unstar" | "project_archive" | "project_restore",
+  ) =>
+    registerExecutor(kind, (action) =>
+      Effect.gen(function* () {
+        const done = yield* withProjectLock(
+          action.project,
+          Effect.gen(function* () {
+            const project = yield* readProject(action.project);
+            if (project === null) {
+              return null;
+            }
+            if (kind === "project_star") {
+              return yield* writeProject({
+                ...project,
+                starred_at: project.starred_at ?? (yield* nowIso),
+              });
+            }
+            if (kind === "project_unstar") {
+              return yield* writeProject(
+                projectTimes(project, { archived_at: project.archived_at }),
+              );
+            }
+            if (kind === "project_archive") {
+              return yield* writeProject({
+                ...project,
+                archived_at: project.archived_at ?? (yield* nowIso),
+              });
+            }
+            return yield* writeProject(projectTimes(project, { starred_at: project.starred_at }));
+          }),
+        );
+        if (done === null) {
+          return failed(`no Project ${action.project} here`);
+        }
+        const said = {
+          project_star: "starred",
+          project_unstar: "unstarred",
+          project_archive: "archived",
+          project_restore: "restored",
+        }[kind];
+        return { state: "applied" as const, note: `${done.name} ${said}`, project: done.id };
+      }),
+    );
+  projectChange("project_star");
+  projectChange("project_unstar");
+  projectChange("project_archive");
+  projectChange("project_restore");
+  registerExecutor("task_file", (action, _by, env) =>
+    Effect.gen(function* () {
+      if (action.filings.length === 0) {
+        return failed("task_file needs at least one Task");
+      }
+      const installation = yield* hostInstallation(env.stateDir);
+      const filed: Array<Filing> = [];
+      for (const entry of action.filings) {
+        const missing = {
+          task: entry.task,
+          result: "missing" as const,
+          membership: { project: null, seq: 0 },
+        };
+        if (entry.installation !== undefined && entry.installation !== installation) {
+          filed.push(missing);
+          continue;
+        }
+        const project = entry.project === undefined ? null : yield* readProject(entry.project);
+        if (entry.project !== undefined && project === null) {
+          filed.push(missing);
+          continue;
+        }
+        if (project !== null && isArchived(project)) {
+          filed.push({ ...missing, result: "archived" });
+          continue;
+        }
+        filed.push(
+          yield* fileTask({
+            id: entry.task,
+            project: project === null ? null : { installation: installation ?? "", id: project.id },
+            expected: entry.expected,
+          }),
+        );
+      }
+      const counts = Arr.map(
+        ["filed", "already", "stale", "archived", "missing"],
+        (result) => [result, Arr.filter(filed, (one) => one.result === result).length] as const,
+      );
+      const said = Arr.join(
+        Arr.flatMap(counts, ([result, count]) => (count === 0 ? [] : [`${count} ${result}`])),
+        ", ",
+      );
+      const any = Arr.some(filed, (one) => one.result === "filed" || one.result === "already");
+      return { state: any ? ("applied" as const) : ("failed" as const), note: said, filed };
+    }),
+  );
+  const followChange = (kind: "task_follow" | "task_unfollow") =>
+    registerExecutor(kind, (action, by) =>
+      Effect.gen(function* () {
+        const done =
+          kind === "task_follow"
+            ? yield* followTask(action.task, actorName(by))
+            : yield* unfollowTask(action.task);
+        if (done === null) {
+          return failed(`no Task ${action.task} here`);
+        }
+        return {
+          state: "applied" as const,
+          note: `${done.label} ${kind === "task_follow" ? "followed" : "unfollowed"}`,
+          task: done.id,
+        };
+      }),
+    );
+  followChange("task_follow");
+  followChange("task_unfollow");
   registerExecutor("update_defaults", (action, _by, env) =>
     Effect.gen(function* () {
       // WARNING: the named workspace's scope, never this process's: a Run reads its defaults where it was started.
@@ -780,7 +976,14 @@ export const carryOutAsked = Effect.fn("runActions.carryOutAsked")(function* (
   actor: Actor,
 ) {
   yield* registerRunExecutors();
-  const results: Array<{ kind: string; state: string; note: string; task?: string }> = [];
+  const results: Array<{
+    kind: string;
+    state: string;
+    note: string;
+    task?: string;
+    project?: string;
+    filed?: ReadonlyArray<Filing>;
+  }> = [];
   for (const [index, action] of actions.entries()) {
     const executor = executorFor(action.kind);
     if (!executor) {
@@ -793,12 +996,7 @@ export const carryOutAsked = Effect.fn("runActions.carryOutAsked")(function* (
       continue;
     }
     const outcome = yield* executor(action, stepOf(actor, index), env);
-    const said = { kind: action.kind, state: outcome.state, note: outcome.note ?? "" };
-    const result: ActionResult =
-      outcome.state === "applied" && outcome.task !== undefined
-        ? { ...said, task: outcome.task }
-        : said;
-    results.push(result);
+    results.push({ kind: action.kind, ...outcome, note: outcome.note ?? "" });
     if (outcome.state === "failed") {
       break;
     }

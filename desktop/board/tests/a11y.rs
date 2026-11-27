@@ -6,7 +6,7 @@ use collie_desktop_board::flow::FlowMap;
 use collie_desktop_board::{App, view};
 use collie_desktop_protocol::generated::DetailFlow;
 use rune::{Env, Key, KeyEvent, Mods, Runtime};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 const FLOCK: &str = include_str!("../../fixtures/flock.ndjson");
 const FLOWS: &str = include_str!("../../fixtures/flows.json");
@@ -176,4 +176,111 @@ fn a_new_current_step_and_a_step_that_asks_are_announced_politely() {
     runtime.update(|board, _| board.flow.as_mut().unwrap().set(flow("asking")));
     runtime.frame(0.1);
     assert_eq!(announced(&runtime), "Review, needs you, Asked 1 min ago");
+}
+
+/// A narrow window on one Machine with two Projects, one Task of which needs the operator.
+fn with_projects(width: f32) -> Runtime<App> {
+    let items = [
+        json!({"machine": {"installation": "inst-pc", "profile": "local", "name": "mk-pc"},
+            "message": {"_tag": "Snapshot", "installation": "inst-pc", "build": "0.118.0",
+                "protocol": 7, "files": true, "herds": [{"id": "h1"}],
+                "projects": [
+                    {"installation": "inst-pc", "id": "project-payments", "name": "Payments",
+                     "starred": false, "archived": false, "tasks": 1.0, "needs": 1.0},
+                    {"installation": "inst-pc", "id": "project-cego", "name": "CEGO Platform",
+                     "starred": true, "archived": false, "tasks": 0.0, "needs": 0.0}
+                ],
+                "tasks": [{
+                    "id": "t-1", "name": "Refunds", "project": "content", "state": "blocked",
+                    "steps": [], "sentence": "Refunds is waiting on you.", "age": "5m",
+                    "drift": null, "held": null, "heldBy": null, "decision": null, "agents": [],
+                    "children": [], "mr": null, "branch": null, "disposition": null,
+                    "landed": false, "ended": null, "mrState": null, "planReady": false,
+                    "offer": null, "run": "r-1", "runs": ["r-1"], "at": 1.0,
+                    "projectId": {"installation": "inst-pc", "id": "project-payments"}
+                }],
+                "seq": 1}
+        }),
+    ];
+    let mut board = App::default();
+    for item in items {
+        board.apply(serde_json::from_value(item).unwrap());
+    }
+    board.nav.chat.set_open(false);
+    let mut runtime = Runtime::new(
+        board,
+        view,
+        (width, 640.0),
+        Env {
+            system_dark: true,
+            scale: 1.0,
+        },
+    );
+    runtime.frame(0.0);
+    runtime.frame(0.016);
+    runtime
+}
+#[test]
+fn at_a_narrow_width_the_sidebar_names_the_flock_and_each_project() {
+    let tree = with_projects(760.0).accessibility_json();
+    assert_eq!(keyed(&tree, "nav-board")["name"], "Board");
+    assert_eq!(keyed(&tree, "projects")["name"], "Projects");
+    let payments = keyed(&tree, "project-inst-pc-project-payments");
+    assert_eq!(payments["name"], "Payments");
+    assert_eq!(
+        payments["description"], "1",
+        "a Project says how many Tasks need you"
+    );
+    assert_eq!(
+        keyed(&tree, "project-inst-pc-project-cego")["name"],
+        "CEGO Platform"
+    );
+    assert_eq!(keyed(&tree, "nav-settings")["name"], "Settings");
+}
+#[test]
+fn keyboard_focus_reaches_the_flock_and_each_project_and_selecting_keeps_the_row_focused() {
+    let mut runtime = with_projects(760.0);
+    // The sidebar is one focus group: Tab enters it at the Board, and the arrows go on.
+    for _ in 0..80 {
+        press(&mut runtime, Key::Tab);
+        if focused(&runtime).as_deref() == Some("nav-board") {
+            break;
+        }
+    }
+    let mut stops = Vec::new();
+    for _ in 0..20 {
+        press(&mut runtime, Key::Down);
+        let Some(key) = focused(&runtime) else {
+            continue;
+        };
+        stops.push(key.clone());
+        if key == "project-inst-pc-project-payments" {
+            break;
+        }
+    }
+    assert_eq!(
+        focused(&runtime).as_deref(),
+        Some("project-inst-pc-project-payments"),
+        "arrows reach a Project's row: {stops:?}"
+    );
+    press(&mut runtime, Key::Enter);
+    assert_eq!(
+        focused(&runtime).as_deref(),
+        Some("project-inst-pc-project-payments"),
+        "selecting a Project leaves its row focused"
+    );
+    let tree = runtime.accessibility_json();
+    let selected = keyed(&tree, "project-inst-pc-project-payments");
+    assert!(
+        selected["states"]
+            .as_array()
+            .is_some_and(|states| states.iter().any(|one| one == "selected")),
+        "{selected:#}"
+    );
+    assert!(
+        within(&tree)
+            .into_iter()
+            .any(|node| node["name"] == "Following"),
+        "the scoped board offers Following"
+    );
 }

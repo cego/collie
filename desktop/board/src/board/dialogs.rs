@@ -28,6 +28,12 @@ fn offer_entries(app: &mut App) -> &mut Vec<offer_form::OfferEntry> {
     }
 }
 
+fn project_name_edit(app: &mut App) -> &mut TextEdit {
+    match &mut app.board.dialog {
+        Some(Dialog::NewProject { edit }) => edit,
+        _ => unreachable!("a new project dialog is open"),
+    }
+}
 fn words_edit(app: &mut App) -> &mut TextEdit {
     match &mut app.board.dialog {
         Some(Dialog::Words { edit, .. }) => edit,
@@ -40,6 +46,39 @@ pub fn dialog(app: &App, k: &Kit, layer: &mut Vec<El>) {
         return;
     };
     match open {
+        Dialog::NewProject { edit } => {
+            let empty = edit.text.trim().is_empty();
+            let body = col()
+                .gap(12.0)
+                .padding(16.0)
+                .pt(0.0)
+                .child(
+                    TextInput::new(edit)
+                        .label("Project name")
+                        .placeholder("Payments")
+                        .width(None)
+                        .on_edit(project_name_edit)
+                        .on_submit(|app: &mut App, _: &mut rune::Tx| app.create_project())
+                        .build(k)
+                        .key("project-name"),
+                )
+                .child(
+                    row().w_full().justify_end().child(
+                        Button::new("Create Project")
+                            .variant(ButtonVariant::Contrast)
+                            .disabled(empty)
+                            .on_press(App::create_project)
+                            .build(k)
+                            .key("create-project"),
+                    ),
+                );
+            Modal::new("new-project", "New Project".to_string())
+                .open(true)
+                .fit()
+                .child(body)
+                .on_close(close)
+                .build(collie_desktop_theme::dialog(k.dark), layer);
+        }
         Dialog::Words {
             card,
             kind,

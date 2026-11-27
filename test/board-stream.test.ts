@@ -17,10 +17,11 @@ import {
   Stream,
   flow as Schemaflow,
   Result,
+  SubscriptionRef,
 } from "effect";
 import type { Duration } from "effect";
 import { BoardMessage, PaneAt, PROTOCOL, TaskView, recordIn, sectionOf } from "../src/board-model";
-import type { Flow, BoardSnapshot } from "../src/board-model";
+import type { Flow, BoardSnapshot, ProjectView } from "../src/board-model";
 import { buildBoard } from "../src/board";
 import { boardMessages, shareBoard } from "../src/board-stream";
 import { recordDisposition } from "../src/disposition";
@@ -373,8 +374,14 @@ const handBuilt = Effect.gen(function* () {
     ),
   );
   const { boards } = yield* shareBoard({ build, changed: Stream.fromQueue(changed) });
+  const projects = yield* SubscriptionRef.make<ReadonlyArray<ProjectView>>([]);
+  const withProjects = boards.pipe(
+    Stream.mapEffect((tasks) =>
+      Effect.map(SubscriptionRef.get(projects), (projects) => ({ tasks, projects })),
+    ),
+  );
   const follow = (count: number) =>
-    boardMessages({ head: HEAD, boards }).pipe(
+    boardMessages({ head: HEAD, boards: withProjects }).pipe(
       Stream.take(count),
       Stream.runCollect,
       Effect.forkScoped,
@@ -389,9 +396,18 @@ const handBuilt = Effect.gen(function* () {
         }),
       ),
     );
-  return { builds, changed, boards, follow, built, calls: () => calls };
+  return { builds, changed, boards, projects, follow, built, calls: () => calls };
 });
 
+const payment = {
+  installation: "i",
+  id: "project-payments",
+  name: "Payments",
+  starred: false,
+  archived: false,
+  tasks: 0,
+  needs: 0,
+};
 const one = task({ id: "a" });
 const two = task({ id: "b" });
 const tags = (messages: ReadonlyArray<BoardMessage>) =>
@@ -427,12 +443,32 @@ test("a client arriving after a build is told that board, and nothing is built f
         yield* Queue.offer(hand.builds, [one]);
         yield* Fiber.join(yield* hand.follow(1));
         const late = yield* Fiber.join(yield* hand.follow(1));
-        expect(late).toEqual([{ _tag: "Snapshot", ...HEAD, tasks: [one], seq: 1 }]);
+        expect(late).toEqual([{ _tag: "Snapshot", ...HEAD, projects: [], tasks: [one], seq: 1 }]);
         expect(hand.calls()).toBe(1);
       }),
     ),
   ));
 
+test("a Project made with no Task changing reaches a watching client", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hand = yield* handBuilt;
+        const watching = yield* hand.follow(2);
+        yield* hand.built([one]);
+        yield* SubscriptionRef.set(hand.projects, [payment]);
+        yield* Queue.offer(hand.changed, undefined);
+        yield* hand.built([one]);
+        const messages = yield* Fiber.join(watching);
+        expect(tags(messages)).toEqual(["Snapshot", "Projects"]);
+        const [_, changed] = messages;
+        expect(changed).toMatchObject({
+          _tag: "Projects",
+          projects: [{ id: "project-payments", name: "Payments", tasks: 0, needs: 0 }],
+        });
+      }),
+    ),
+  ));
 test("a client arriving before the first build is told its snapshot once that build is done", () =>
   runEffect(
     Effect.scoped(
@@ -443,7 +479,7 @@ test("a client arriving before the first build is told its snapshot once that bu
         expect(early.pollUnsafe()).toBeUndefined();
         yield* Queue.offer(hand.builds, [two]);
         expect(yield* Fiber.join(early)).toEqual([
-          { _tag: "Snapshot", ...HEAD, tasks: [two], seq: 1 },
+          { _tag: "Snapshot", ...HEAD, projects: [], tasks: [two], seq: 1 },
         ]);
       }),
     ),
@@ -828,7 +864,7 @@ test("a client subscribed before a month-old card is read and pruned is told it 
       const told = yield* Queue.unbounded<BoardMessage>();
       yield* boardMessages({
         head: { installation: "installation", build: BUILD, protocol: PROTOCOL, herds: [] },
-        boards,
+        boards: boards.pipe(Stream.map((tasks) => ({ tasks, projects: [] }))),
       }).pipe(
         Stream.runForEach((message) => Queue.offer(told, message)),
         Effect.forkScoped,

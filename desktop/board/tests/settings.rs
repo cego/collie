@@ -740,6 +740,7 @@ fn machine(name: &str) -> Shown {
         },
         herds: Vec::new(),
         cards: Vec::new(),
+        projects: Vec::new(),
         as_of: None,
         build: None,
         development: None,

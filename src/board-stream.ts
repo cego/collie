@@ -1,6 +1,6 @@
 import * as Arr from "effect/Array";
 import { Cause, Clock, Effect, Option, Stream, SubscriptionRef } from "effect";
-import type { BoardMessage, BoardSnapshot, TaskView } from "./board-model";
+import type { BoardMessage, BoardSnapshot, ProjectView, TaskView } from "./board-model";
 import { recordMarks } from "./record-marks";
 import { Foreground } from "./foreground";
 import { stringifyJson } from "./json";
@@ -88,13 +88,21 @@ export const shareBoard = <A, E, R, R2>(options: {
   });
 
 export const boardMessages = <R>(options: {
-  readonly head: Omit<BoardSnapshot, "_tag" | "tasks" | "seq">;
-  readonly boards: Stream.Stream<ReadonlyArray<TaskView>, never, R>;
+  readonly head: Omit<BoardSnapshot, "_tag" | "tasks" | "seq" | "projects">;
+  readonly boards: Stream.Stream<
+    {
+      readonly tasks: ReadonlyArray<TaskView>;
+      readonly projects: ReadonlyArray<ProjectView>;
+    },
+    never,
+    R
+  >;
 }) =>
   Stream.unwrap(
     Effect.sync(() => {
       let seq = 0;
       let told: Map<string, { readonly view: TaskView; readonly text: string }> | null = null;
+      let toldProjects: string | null = null;
       const changesTo = (views: ReadonlyArray<TaskView>) => {
         const now = new Map(
           Arr.map(views, (view) => {
@@ -120,12 +128,25 @@ export const boardMessages = <R>(options: {
         return out;
       };
       return options.boards.pipe(
-        Stream.flatMap((views) => {
-          if (told !== null) {
-            return Stream.fromIterable(changesTo(views));
+        Stream.flatMap(({ tasks: views, projects }) => {
+          const said = stringifyJson(projects);
+          const projectsMoved = said !== toldProjects;
+          toldProjects = said;
+          if (told === null) {
+            changesTo(views);
+            return Stream.make({
+              _tag: "Snapshot",
+              ...options.head,
+              projects,
+              tasks: views,
+              seq,
+            });
           }
-          changesTo(views);
-          return Stream.make({ _tag: "Snapshot", ...options.head, tasks: views, seq });
+          const changed: Array<BoardMessage> = changesTo(views);
+          if (projectsMoved) {
+            changed.push({ _tag: "Projects", seq: ++seq, projects });
+          }
+          return Stream.fromIterable(changed);
         }),
       );
     }),

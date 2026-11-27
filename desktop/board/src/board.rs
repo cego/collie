@@ -109,6 +109,8 @@ pub enum Dialog {
     },
     /// A card's running check: what it is doing and its last lines, read off the live card.
     Check { card: String },
+    /// A new Project's name, before it exists.
+    NewProject { edit: TextEdit },
     Proposal {
         card: String,
         installation: String,
@@ -900,6 +902,62 @@ impl App {
     }
 
     /// Sends a Steer's or a Follow-up's words, once there are some.
+    /// Asks for a name for a new Project on this computer.
+    pub fn new_project(&mut self) {
+        self.board.dialog = Some(Dialog::NewProject {
+            edit: focused_edit(),
+        });
+    }
+    /// Creates the Project the dialog names, on this computer, which owns it.
+    pub fn create_project(&mut self) {
+        let Some(Dialog::NewProject { edit }) = &self.board.dialog else {
+            return;
+        };
+        let name = edit.text.trim().to_string();
+        let Some(installation) = self.local_installation().map(str::to_string) else {
+            self.warn("No Machine of this Flock is this computer".into());
+            return;
+        };
+        if name.is_empty() {
+            return;
+        }
+        self.board.dialog = None;
+        self.act(
+            &installation,
+            json!({"_tag": "ProjectCreate", "name": name}),
+            None,
+            None,
+        );
+    }
+    /// Stars or unstars a Project, or archives and restores it, on the Machine that owns it.
+    pub fn change_project(&mut self, installation: String, project: String, change: &str) {
+        let tag = match change {
+            "star" => "ProjectStar",
+            "unstar" => "ProjectUnstar",
+            "archive" => "ProjectArchive",
+            _ => "ProjectRestore",
+        };
+        self.act(
+            &installation,
+            json!({"_tag": tag, "project": project}),
+            None,
+            None,
+        );
+    }
+    /// Follows one Task, or stops following it, on the Machine that owns it.
+    pub fn follow_task(&mut self, installation: String, task: String, following: bool) {
+        let tag = if following {
+            "TaskFollow"
+        } else {
+            "TaskUnfollow"
+        };
+        self.act(
+            &installation,
+            json!({"_tag": tag, "task": task}),
+            None,
+            None,
+        );
+    }
     pub fn send_words(&mut self) {
         let Some(Dialog::Words {
             kind,

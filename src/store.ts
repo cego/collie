@@ -576,6 +576,16 @@ const migrations = (imports: {
       ) WITHOUT ROWID
     `;
   }),
+  "31_projects": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      CREATE TABLE collie_projects (
+        id TEXT PRIMARY KEY,
+        record TEXT NOT NULL,
+        created_at TEXT AS (json_extract(record, '$.created_at'))
+      )
+    `;
+  }),
   [RUN_RECORDS_MIGRATION]: Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql.unsafe(`

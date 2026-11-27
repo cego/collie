@@ -76,7 +76,7 @@ import { SCHEDULES_UPGRADE_SAID } from "../shared/schedules";
 import type { MachineSchedules } from "../shared/schedules";
 import { CLEANUP_UPGRADE_SAID } from "../shared/machine-cleanup";
 import type { ScheduleChange } from "../../../src/schedule-model";
-import type { ActionSchema } from "../../../src/actions";
+import type { Action, ActionSchema } from "../../../src/actions";
 import type { Mutable } from "effect/Types";
 import { moveSchedule } from "../../../src/schedule-move";
 import type { ScheduleDoor } from "../../../src/schedule-move";
@@ -1453,6 +1453,39 @@ interface Unsteered {
   readonly message: string;
 }
 
+const collieAction = (
+  action:
+    | Extract<DesktopAction, { _tag: "ProjectCreate" }>
+    | Extract<DesktopAction, { _tag: "ProjectStar" }>
+    | Extract<DesktopAction, { _tag: "ProjectUnstar" }>
+    | Extract<DesktopAction, { _tag: "ProjectArchive" }>
+    | Extract<DesktopAction, { _tag: "ProjectRestore" }>
+    | Extract<DesktopAction, { _tag: "TaskFile" }>
+    | Extract<DesktopAction, { _tag: "TaskFollow" }>
+    | Extract<DesktopAction, { _tag: "TaskUnfollow" }>,
+) => {
+  const returned: Action = (() => {
+    switch (action._tag) {
+      case "ProjectCreate":
+        return { kind: "project_create", name: action.name };
+      case "ProjectStar":
+        return { kind: "project_star", project: action.project };
+      case "ProjectUnstar":
+        return { kind: "project_unstar", project: action.project };
+      case "ProjectArchive":
+        return { kind: "project_archive", project: action.project };
+      case "ProjectRestore":
+        return { kind: "project_restore", project: action.project };
+      case "TaskFile":
+        return { kind: "task_file", filings: action.filings };
+      case "TaskFollow":
+        return { kind: "task_follow", task: action.task };
+      case "TaskUnfollow":
+        return { kind: "task_unfollow", task: action.task };
+    }
+  })();
+  return returned;
+};
 const aboutOf = (action: DesktopAction) => {
   switch (action._tag) {
     case "Confirm":
@@ -1470,6 +1503,27 @@ const aboutOf = (action: DesktopAction) => {
         about: action.runId,
         what: `the ${action.control} of ${action.runId}`,
       };
+    case "ProjectCreate":
+      return { about: action.name, what: `a Project called ${action.name}` };
+    case "ProjectStar":
+    case "ProjectUnstar":
+    case "ProjectArchive":
+    case "ProjectRestore":
+      return {
+        about: action.project,
+        what: `${pipe_(Str.replace(/^Project/, "")(action._tag), Str.toLowerCase)} ${action.project}`,
+      };
+    case "TaskFile":
+      return {
+        about: Arr.join(
+          Arr.map(action.filings, (one) => one.task),
+          ", ",
+        ),
+        what: "filing a Task",
+      };
+    case "TaskFollow":
+    case "TaskUnfollow":
+      return { about: action.task, what: `${Str.toLowerCase(action._tag)} ${action.task}` };
     default:
       return {
         about: action.runId,
@@ -1623,6 +1677,24 @@ export const act = (
             Effect.map(freshly),
             Effect.map((started) => withNotice(`Started ${started.runId}`, started.redacted, ". ")),
           );
+      case "ProjectCreate":
+      case "ProjectStar":
+      case "ProjectUnstar":
+      case "ProjectArchive":
+      case "ProjectRestore":
+      case "TaskFile":
+      case "TaskFollow":
+      case "TaskUnfollow":
+        return door.act({ actions: [collieAction(action)], request }).pipe(
+          Effect.flatMap(([done]) =>
+            done?.state === "applied"
+              ? Effect.succeed(done.note || "Done")
+              : Effect.fail<Unsteered>({
+                  _tag: "Unsteered",
+                  message: done?.note || "the host said nothing about it",
+                }),
+          ),
+        );
     }
   })();
   const sending = {

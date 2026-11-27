@@ -292,6 +292,16 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ],
   ["run intent defaults set-authority", { route: "shell" }],
   ["task list", { route: "read", tool: "collie_workspaces" }],
+  ["task create", { route: "write", tool: "collie_do" }],
+  ["task file", { route: "write", tool: "collie_do" }],
+  ["task follow", { route: "write", tool: "collie_do" }],
+  ["task unfollow", { route: "write", tool: "collie_do" }],
+  ["project list", { route: "shell" }],
+  ["project create", { route: "write", tool: "collie_do" }],
+  ["project star", { route: "write", tool: "collie_do" }],
+  ["project unstar", { route: "write", tool: "collie_do" }],
+  ["project archive", { route: "write", tool: "collie_do" }],
+  ["project restore", { route: "write", tool: "collie_do" }],
   ["settings list", { route: "shell" }],
   ["settings set", { route: "shell" }],
   ["run output", { route: "read", tool: "collie_run", input: { run: RUN } }],
@@ -589,6 +599,7 @@ test("chat and the text board list the sections in the board's one order", () =>
     }),
     task({ id: "waiting", name: "Shippable", state: "done", landed: false }),
     task({ id: "blocked", name: "Asking", state: "blocked" }),
+    task({ id: "queued", name: "Queued", queued: true }),
   ]);
   const order = Arr.map(SECTIONS, ([, title]) => title);
   const titled = (lines: ReadonlyArray<string>) =>

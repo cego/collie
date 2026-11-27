@@ -9,7 +9,8 @@ use collie_desktop_board::board::cards::{
     CardAction, CardMr, card_actions, card_flow, card_mrs, primary_action,
 };
 use collie_desktop_board::board::model::{
-    Flock, Section, Shown, apply_item, fallback_line, placed, reaching, reaching_said, section_of,
+    Flock, Scope, Section, Shown, apply_item, fallback_line, needs_of, placed, project_rows,
+    reaching, reaching_said, scoped, section_of,
 };
 use collie_desktop_board::board::questionnaire::{Does, Event, HOLD, Questionnaire, Where};
 use collie_desktop_board::board::{backoff, renewal_due};
@@ -758,4 +759,135 @@ fn a_card_from_a_host_before_queued_tasks_still_sits_where_it_did() {
         where_(vec![snapshot(pc(), vec![older], default_herd())]),
         pairs(&[("t-old", "")])
     );
+}
+
+fn project(id: &str, name: &str, starred: bool, archived: bool) -> Value {
+    json!({"installation": "inst-pc", "id": id, "name": name, "starred": starred,
+        "archived": archived, "tasks": 0.0, "needs": 0.0})
+}
+fn with_projects(tasks: Vec<Value>, projects: Vec<Value>) -> Value {
+    json!({"machine": pc(), "message": {
+        "_tag": "Snapshot", "installation": "inst-pc", "build": "0.118.0", "protocol": 7,
+        "herds": default_herd(), "projects": projects, "tasks": tasks, "seq": 1,
+    }})
+}
+fn heard(items: Vec<Value>) -> (Vec<Shown>, Flock) {
+    let (mut machines, mut flock): (Vec<Shown>, Flock) = Default::default();
+    for item in items {
+        apply_item(
+            &mut machines,
+            &mut flock,
+            serde_json::from_value(item).unwrap(),
+        );
+    }
+    (machines, flock)
+}
+fn payments() -> Scope {
+    Scope {
+        installation: "inst-pc".into(),
+        id: "project-payments".into(),
+    }
+}
+#[test]
+fn the_sidebar_lists_starred_projects_first_and_archived_ones_apart() {
+    let (machines, _) = heard(vec![with_projects(
+        Vec::new(),
+        vec![
+            project("project-payments", "Payments", false, false),
+            project("project-cego", "CEGO Platform", true, false),
+            project("project-product", "Product", false, true),
+        ],
+    )]);
+    let (live, archived) = project_rows(&machines);
+    let names: Vec<&str> = live.iter().map(|row| row.project.name.as_str()).collect();
+    assert_eq!(names, ["CEGO Platform", "Payments"]);
+    assert_eq!(
+        archived
+            .iter()
+            .map(|row| row.project.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Product"]
+    );
+    // WARNING: a star orders the list; it never moves a Project's Tasks to another section.
+    let starred = heard(vec![with_projects(
+        vec![task(
+            "t-1",
+            "active",
+            json!({"projectId": {"installation": "inst-pc", "id": "project-cego"}}),
+        )],
+        vec![
+            project("project-payments", "Payments", false, false),
+            project("project-cego", "CEGO Platform", true, false),
+        ],
+    )])
+    .0;
+    let (live, _) = project_rows(&starred);
+    assert_eq!(live[0].project.id, "project-cego");
+}
+#[test]
+fn a_scope_shows_its_own_projects_tasks_and_following_only_the_ones_followed() {
+    let membership = json!({"projectId": {"installation": "inst-pc", "id": "project-payments"}});
+    let mut mine = task("t-1", "active", membership.clone());
+    mine["following"] = json!(true);
+    let other = task("t-2", "active", membership);
+    let elsewhere = task(
+        "t-3",
+        "active",
+        json!({"projectId": {"installation": "inst-pc", "id": "project-cego"}}),
+    );
+    let (machines, _) = heard(vec![with_projects(
+        vec![mine, other, elsewhere],
+        vec![
+            project("project-payments", "Payments", false, false),
+            project("project-cego", "CEGO Platform", false, false),
+        ],
+    )]);
+    let every = |following| {
+        scoped(&machines, Some(&payments()), following)
+            .into_iter()
+            .map(|one| one.task.id.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(every(false), ["t-1", "t-2"]);
+    assert_eq!(every(true), ["t-1"]);
+}
+#[test]
+fn a_followed_task_stays_in_the_section_it_moved_to() {
+    let membership = json!({"projectId": {"installation": "inst-pc", "id": "project-payments"},
+        "following": true});
+    let (machines, _) = heard(vec![with_projects(
+        vec![task("t-1", "blocked", membership.clone())],
+        vec![project("project-payments", "Payments", false, false)],
+    )]);
+    let blocked = scoped(&machines, Some(&payments()), true);
+    assert_eq!(
+        blocked
+            .iter()
+            .map(|one| section_of(one.task))
+            .collect::<Vec<_>>(),
+        [Section::NeedsYou]
+    );
+}
+#[test]
+fn needs_you_counts_a_task_once_however_many_questions_it_carries() {
+    let membership = json!({"projectId": {"installation": "inst-pc", "id": "project-payments"}});
+    let asking = task(
+        "t-1",
+        "blocked",
+        json!({"questions": [
+            {"kind": "question", "run": "r-1", "id": "q-1", "step": "plan", "topic": "one",
+             "text": "First?", "options": []},
+            {"kind": "question", "run": "r-1", "id": "q-2", "step": "plan", "topic": "two",
+             "text": "Second?", "options": []}
+        ]}),
+    );
+    let mut with_membership = asking;
+    for (key, value) in membership.as_object().unwrap() {
+        with_membership[key] = value.clone();
+    }
+    let (machines, _) = heard(vec![with_projects(
+        vec![with_membership],
+        vec![project("project-payments", "Payments", false, false)],
+    )]);
+    assert_eq!(needs_of(&machines, &payments()), 1);
 }

@@ -54,6 +54,7 @@ pub enum Message {
     Snapshot(Snapshot),
     Upsert(Upsert),
     Remove(Remove),
+    Projects(Projects),
     UnknownMessage(UnknownMessage),
 }
 
@@ -71,6 +72,8 @@ pub struct Snapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artefacts: Option<bool>,
     pub herds: Vec<Herd>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projects: Option<Vec<Project>>,
     pub tasks: Vec<Task>,
     pub seq: i64,
 }
@@ -86,6 +89,17 @@ pub struct Herd {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Project {
+    pub installation: String,
+    pub id: String,
+    pub name: String,
+    pub starred: bool,
+    pub archived: bool,
+    pub tasks: f64,
+    pub needs: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -157,6 +171,12 @@ pub struct Task {
     pub as_of: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queued: Option<bool>,
+    #[serde(rename = "projectId", default, skip_serializing_if = "Option::is_none", with = "crate::double_option")]
+    pub project_id: Option<Option<ProjectId>>,
+    #[serde(rename = "membershipSeq", default, skip_serializing_if = "Option::is_none")]
+    pub membership_seq: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub following: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -687,6 +707,12 @@ pub struct Revision {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectId {
+    pub installation: String,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Upsert {
     #[serde(rename = "_tag")]
     pub tag: UpsertTag,
@@ -712,6 +738,20 @@ pub struct Remove {
 pub enum RemoveTag {
     #[serde(rename = "Remove")]
     Remove,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Projects {
+    #[serde(rename = "_tag")]
+    pub tag: ProjectsTag,
+    pub seq: i64,
+    pub projects: Vec<Project>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ProjectsTag {
+    #[serde(rename = "Projects")]
+    Projects,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2751,6 +2791,14 @@ pub enum ActPayloadAction {
     WithdrawNote(WithdrawNote),
     FollowUp(FollowUp),
     Invoke(Invoke),
+    ProjectCreate(ProjectCreate),
+    ProjectStar(ProjectStar),
+    ProjectUnstar(ProjectUnstar),
+    ProjectArchive(ProjectArchive),
+    ProjectRestore(ProjectRestore),
+    TaskFile(TaskFile),
+    TaskFollow(TaskFollow),
+    TaskUnfollow(TaskUnfollow),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2957,6 +3005,119 @@ pub enum InvokeTag {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InvokeInput {
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectCreate {
+    #[serde(rename = "_tag")]
+    pub tag: ProjectCreateTag,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ProjectCreateTag {
+    #[serde(rename = "ProjectCreate")]
+    ProjectCreate,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectStar {
+    #[serde(rename = "_tag")]
+    pub tag: ProjectStarTag,
+    pub project: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ProjectStarTag {
+    #[serde(rename = "ProjectStar")]
+    ProjectStar,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectUnstar {
+    #[serde(rename = "_tag")]
+    pub tag: ProjectUnstarTag,
+    pub project: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ProjectUnstarTag {
+    #[serde(rename = "ProjectUnstar")]
+    ProjectUnstar,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectArchive {
+    #[serde(rename = "_tag")]
+    pub tag: ProjectArchiveTag,
+    pub project: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ProjectArchiveTag {
+    #[serde(rename = "ProjectArchive")]
+    ProjectArchive,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectRestore {
+    #[serde(rename = "_tag")]
+    pub tag: ProjectRestoreTag,
+    pub project: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ProjectRestoreTag {
+    #[serde(rename = "ProjectRestore")]
+    ProjectRestore,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskFile {
+    #[serde(rename = "_tag")]
+    pub tag: TaskFileTag,
+    pub filings: Vec<Filing>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TaskFileTag {
+    #[serde(rename = "TaskFile")]
+    TaskFile,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Filing {
+    pub task: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskFollow {
+    #[serde(rename = "_tag")]
+    pub tag: TaskFollowTag,
+    pub task: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TaskFollowTag {
+    #[serde(rename = "TaskFollow")]
+    TaskFollow,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskUnfollow {
+    #[serde(rename = "_tag")]
+    pub tag: TaskUnfollowTag,
+    pub task: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TaskUnfollowTag {
+    #[serde(rename = "TaskUnfollow")]
+    TaskUnfollow,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

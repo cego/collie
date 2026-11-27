@@ -42,7 +42,7 @@ export const board = Command.make(
               const tasks = read.value.tasks;
               return {
                 ok: true as const,
-                data: { tasks },
+                data: { tasks, projects: read.value.projects ?? [] },
                 human:
                   tasks.length === 0
                     ? "nothing on the board"

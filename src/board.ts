@@ -35,7 +35,7 @@ import type { AgentEntry } from "./registry";
 import { listRuns, newestFirst, settled as ended } from "./runs";
 import type { RunFacts, RunState } from "./runs";
 import type { PluginEnv } from "./env";
-import { isQueued, listTasks } from "./task";
+import { isFollowing, isQueued, listTasks, membershipOf } from "./task";
 import type { TaskRecord } from "./task";
 import { ago, agoMs, agoShort, spanned, epochMs } from "./time";
 import {
@@ -781,8 +781,11 @@ const queuedView = (task: TaskRecord, now: number) => {
     runs: [],
     at: Number.isNaN(created) ? now : created,
     queued: true,
+    projectId: task.project ?? null,
+    membershipSeq: membershipOf(task).seq,
   };
-  return task.herd ? { ...view, herd: task.herd } : view;
+  const followed: TaskView = isFollowing(task) ? { ...view, following: true } : view;
+  return task.herd ? { ...followed, herd: task.herd } : followed;
 };
 
 const BUILDER_ROLE = "implementer";
@@ -1738,6 +1741,7 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           state === "failed" ? lastFailure(yield* readProofsOf([leader.evidence])) : null;
         const open = openReports(yield* readDrift(leader.dir).pipe(Effect.orElseSucceed(() => [])));
         const task = leader.task === null ? null : (tasks.get(leader.task) ?? null);
+        const membership = task === null ? null : membershipOf(task);
         const { name, project } = namesOf(task?.label ?? "", leader);
         const started = Arr.filter(
           Arr.map(runs, (run) => epochMs(run.created)),
@@ -2197,8 +2201,12 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
           runs: Arr.map(runs, (run) => run.id),
           at: at === 0 ? first : at,
           flow: stripOf(flow, leader.id, planReady ? null : offer),
+          projectId: membership === null ? null : membership.project,
+          membershipSeq: membership?.seq ?? 0,
         };
-        const view: TaskView = mrs.length === 0 ? bare : { ...bare, mrs, offers };
+        const followed: TaskView =
+          task !== null && isFollowing(task) ? { ...bare, following: true } : bare;
+        const view: TaskView = mrs.length === 0 ? followed : { ...followed, mrs, offers };
         opts.flows?.set(
           id,
           flowActions(

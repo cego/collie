@@ -45,6 +45,7 @@ import {
   sortBoard,
   TaskView,
 } from "../../../src/board-model";
+import type { ProjectView } from "../../../src/board-model";
 import { HostDefinitions } from "../../../src/definitions-model";
 import { PeerView } from "../../../src/peers-model";
 import { ComputerStores, SetupChoice } from "./standing-setup";
@@ -280,6 +281,23 @@ export const DesktopAction = Schema.Union([
     offer: Schema.String,
     input: Schema.Record(Schema.String, Schema.Json),
   }),
+  // WARNING: a Project is named on the Machine the action reaches, which owns it.
+  Schema.TaggedStruct("ProjectCreate", { name: Schema.String }),
+  Schema.TaggedStruct("ProjectStar", { project: Schema.String }),
+  Schema.TaggedStruct("ProjectUnstar", { project: Schema.String }),
+  Schema.TaggedStruct("ProjectArchive", { project: Schema.String }),
+  Schema.TaggedStruct("ProjectRestore", { project: Schema.String }),
+  Schema.TaggedStruct("TaskFile", {
+    filings: Schema.Array(
+      Schema.Struct({
+        task: Schema.String,
+        project: Schema.optionalKey(Schema.String),
+        expected: Schema.optionalKey(Schema.Finite),
+      }),
+    ),
+  }),
+  Schema.TaggedStruct("TaskFollow", { task: Schema.String }),
+  Schema.TaggedStruct("TaskUnfollow", { task: Schema.String }),
 ]);
 export type DesktopAction = typeof DesktopAction.Type;
 
@@ -695,6 +713,8 @@ export interface FlockMachine {
   readonly machine: Machine;
   readonly herds: ReadonlyArray<Herd>;
   readonly tasks: ReadonlyMap<string, TaskView>;
+  // WARNING: empty for a host older than Projects, which sends none.
+  readonly projects: ReadonlyArray<ProjectView>;
   readonly asOf: number | null;
   readonly build: string | null;
   readonly development: string | null;
@@ -832,6 +852,7 @@ export const applyItem = (flock: Flock, item: FlockItem) => {
       machine,
       herds,
       tasks: new Map(Arr.map(tasks, (task) => [task.id, task])),
+      projects: [],
       asOf: at,
       build: item.build ?? null,
       development: item.development ?? null,
@@ -873,6 +894,12 @@ export const applyItem = (flock: Flock, item: FlockItem) => {
     tasks.delete(message.id);
   }
   const herds = message._tag === "Snapshot" ? message.herds : (known?.herds ?? []);
+  const projects =
+    message._tag === "Snapshot"
+      ? (message.projects ?? [])
+      : message._tag === "Projects"
+        ? message.projects
+        : (known?.projects ?? []);
   const build = message._tag === "Snapshot" ? message.build : (known?.build ?? null);
   const development =
     message._tag === "Snapshot" ? (message.development ?? null) : (known?.development ?? null);
@@ -887,6 +914,7 @@ export const applyItem = (flock: Flock, item: FlockItem) => {
       machine,
       herds,
       tasks,
+      projects,
       asOf: null,
       build,
       development,

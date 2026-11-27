@@ -582,7 +582,47 @@ first Run selects the Workflow and the checkout, and the Task takes that placeme
 One `--request-id` is one Task, and the same start request is one Run, whichever retries it.
 
 `task list` gives the Task id, label and its Runs. Historical `workspace` fields remain
-readable; no external workspace is created. Labels come from the work and existing Task
+readable; no external workspace is created.
+
+### Projects
+
+A **Project** is a place on one Machine's board that Tasks are filed into. Each Machine owns
+the Projects it made: `project create` names one on this Machine, and every other Project
+command names a Project **id** it answers for, so the same id on another Machine is another
+Project.
+
+```sh
+collie --json project create --name Payments
+collie --json project list
+collie --json project star --project project-1a2b3c4d
+collie --json project archive --project project-1a2b3c4d
+collie --json project restore --project project-1a2b3c4d
+```
+
+`star` and `unstar` change the order a sidebar lists Projects in, never whether a Task
+belongs to one. `archive` puts a Project away without touching its work: its Runs carry on,
+its Tasks stay on the global board, and an open question among them is still visible there.
+`restore` brings the same Project back, with its id, so nothing is re-filed.
+File or move a Task with `task file`, which names the Project id on the Task's own Machine:
+
+```sh
+collie --json task file --task task-1a2b3c4d --project project-1a2b3c4d
+collie --json task file --task task-1a2b3c4d --project project-1a2b3c4d --expected 1
+collie --json task file --task task-1a2b3c4d
+```
+
+Without `--project` the Task is left unassigned. `--expected` is the membership the board
+showed as `membershipSeq`; a filing that names an older one is refused `operation_failed`
+with `details.result: "stale"` and the membership that won, so two operators moving the same
+Task cannot silently undo each other. Filing the same Task where it already is answers
+`already`, so retrying a batch files only what did not land. A Project that is archived
+answers `archived`, and an id this Machine has never heard of answers `missing`.
+`task follow --task <id>` keeps a Task in the Following filter of both the global board and
+its Project's board; `task unfollow` drops it. Following is the operator's interest, not a
+decision: a followed Task stays in whichever section its state puts it in.
+An agent reaches all of this through `collie_do`'s `project_create`, `project_star`,
+`project_unstar`, `project_archive`, `project_restore`, `task_file`, `task_follow` and
+`task_unfollow`, which take the same ids and are carried out by the Machine that owns them. Labels come from the work and existing Task
 labels, and do not decide membership. A label you change is left alone.
 
 An agent's commands retain their Run's Task scope, with related Runs reachable through
@@ -896,36 +936,43 @@ pane would not take a prompt. The `sentence` says which, and for the second kind
 reading this and a human reading the board cannot be told two different stories about one
 Task.
 
+Beside `tasks`, the snapshot carries `projects[]`: each Project of the Machine serving it,
+with its `installation`, `id`, `name`, `starred` and `archived` flags, how many Tasks are
+filed into it (`tasks`), and how many of those need you (`needs`, one per Task however many
+questions it carries). A `Projects` message follows a Snapshot when only the Projects
+change, so an empty new Project reaches a reader without a Task changing.
 Herd-wide, and never narrowed by which workspace you typed it in: one board per Herd
 ([ADR-0009](adr/0009-the-collie-tab-is-the-herds.md)). A Run belonging to no Task is a
 Task of its own; a Repo run of a fan-out is its parent's `children` rather than a Task beside it.
 
-| Field                     | What it says                                                                                                                                                                                                              |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                      | The Task, or the Run's own id where it belongs to no Task.                                                                                                                                                                |
-| `name`, `project`         | The two halves of the Task's label. No terminal ids.                                                                                                                                                                      |
-| `herd`                    | The Herd the Task's workspace is in: an `id` in `herds` while that session runs. Absent for a Task recorded before it was kept.                                                                                           |
-| `state`                   | `blocked`, `active`, `quiet`, `failed`, `stopped`, `abandoned` (a Run nothing drives and no agent works on) or `done`.                                                                                                    |
-| `steps[]`                 | The pipeline across the Task's Runs, each `done`, `active`, `blocked`, `failed` or `todo`. A step that loops is one entry.                                                                                                |
-| `sentence`                | What is happening, in one plain sentence — no step names, counters or glyph codes. It names the round, the wave and the answer it resumed with.                                                                           |
-| `age`, `at`               | How long it has been going, and when it last changed.                                                                                                                                                                     |
-| `drift`, `held`           | The one line each carries, or `null`.                                                                                                                                                                                     |
-| `heldBy`                  | Who set the hold that stands — the front door it came through — and the reason given with it, or `null`.                                                                                                                  |
-| `decision`                | The question or proposal waiting on you, or `null`. One of the two ways into Needs you.                                                                                                                                   |
-| `questions[]`             | Every question the Task's Runs have open, in the order the card asks them; `decision` is the first unless a proposal waits. Absent from an older host.                                                                    |
-| `agents[]`                | The live agents on it, its Repo runs' included.                                                                                                                                                                           |
-| `children[]`              | Its plan's repositories, in wave order: `repo`, its `run` (`null` until it starts), its `state` (`done`, `active`, `blocked`, `failed` or `todo`) and its `mr`.                                                           |
-| `mr`, `mrState`, `branch` | What it is building, where it can be read, and what the forge last said about the merge request; a single-repository fan-out's is its Repo run's.                                                                         |
-| `disposition`, `landed`   | The newest Disposition recorded on any of its Runs, and whether everything the Task owes is settled and none of its Runs is going, which is Finished. Each of `mrs[]` says what `settled` it, or `null` while it is owed. |
-| `ended`                   | When the leading Run ended, or `null` while it has not.                                                                                                                                                                   |
-| `planReady`, `offer`      | A finished plan nobody has implemented, and the offer its card's first action invokes.                                                                                                                                    |
-| `checks`                  | What checked an open merge request: `passed` or `failed` (with `name`) at revision `at`, `running`, or `unchecked`; else `null`.                                                                                          |
-| `ready`, `readiness`      | Ready to release: the forge would merge it now on current-head evidence read within two merge-watch rounds. `readiness` names each fact missing, as `run show`'s `data.ready` does.                                       |
-| `shipping`, `shippingMr`  | The host's next shipping action (`merge`, `stage`, `deploy`) and its merge request, or `null`. A ready Merge invokes Release; a declared Go uses the normal answer path. Both fields are additive.                        |
-| `check`                   | The check Collie is running for the leading Run, as `collie run checks` gives `running` (with its `log` and `lastLines`), or `null`.                                                                                      |
-| `reopened`                | A finished Run whose agent took a steer after it ended: the `delivery`, the `agent`, the first line it was `told` and its `status` now; else `null`.                                                                      |
-| `run`, `runs[]`           | The Run a card acts on, and every Run of the Task.                                                                                                                                                                        |
-| `flow`                    | The card's **Flow** strip: `glyphs`, the leading Run's then the Release row's, `release`, how many are the Release row's, and `current`, or `null`.                                                                       |
+| Field                        | What it says                                                                                                                                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                         | The Task, or the Run's own id where it belongs to no Task.                                                                                                                                                                |
+| `name`, `project`            | The two halves of the Task's label. No terminal ids.                                                                                                                                                                      |
+| `herd`                       | The Herd the Task's workspace is in: an `id` in `herds` while that session runs. Absent for a Task recorded before it was kept.                                                                                           |
+| `state`                      | `blocked`, `active`, `quiet`, `failed`, `stopped`, `abandoned` (a Run nothing drives and no agent works on) or `done`.                                                                                                    |
+| `steps[]`                    | The pipeline across the Task's Runs, each `done`, `active`, `blocked`, `failed` or `todo`. A step that loops is one entry.                                                                                                |
+| `sentence`                   | What is happening, in one plain sentence — no step names, counters or glyph codes. It names the round, the wave and the answer it resumed with.                                                                           |
+| `age`, `at`                  | How long it has been going, and when it last changed.                                                                                                                                                                     |
+| `drift`, `held`              | The one line each carries, or `null`.                                                                                                                                                                                     |
+| `heldBy`                     | Who set the hold that stands — the front door it came through — and the reason given with it, or `null`.                                                                                                                  |
+| `decision`                   | The question or proposal waiting on you, or `null`. One of the two ways into Needs you.                                                                                                                                   |
+| `questions[]`                | Every question the Task's Runs have open, in the order the card asks them; `decision` is the first unless a proposal waits. Absent from an older host.                                                                    |
+| `agents[]`                   | The live agents on it, its Repo runs' included.                                                                                                                                                                           |
+| `children[]`                 | Its plan's repositories, in wave order: `repo`, its `run` (`null` until it starts), its `state` (`done`, `active`, `blocked`, `failed` or `todo`) and its `mr`.                                                           |
+| `mr`, `mrState`, `branch`    | What it is building, where it can be read, and what the forge last said about the merge request; a single-repository fan-out's is its Repo run's.                                                                         |
+| `disposition`, `landed`      | The newest Disposition recorded on any of its Runs, and whether everything the Task owes is settled and none of its Runs is going, which is Finished. Each of `mrs[]` says what `settled` it, or `null` while it is owed. |
+| `ended`                      | When the leading Run ended, or `null` while it has not.                                                                                                                                                                   |
+| `planReady`, `offer`         | A finished plan nobody has implemented, and the offer its card's first action invokes.                                                                                                                                    |
+| `checks`                     | What checked an open merge request: `passed` or `failed` (with `name`) at revision `at`, `running`, or `unchecked`; else `null`.                                                                                          |
+| `ready`, `readiness`         | Ready to release: the forge would merge it now on current-head evidence read within two merge-watch rounds. `readiness` names each fact missing, as `run show`'s `data.ready` does.                                       |
+| `shipping`, `shippingMr`     | The host's next shipping action (`merge`, `stage`, `deploy`) and its merge request, or `null`. A ready Merge invokes Release; a declared Go uses the normal answer path. Both fields are additive.                        |
+| `check`                      | The check Collie is running for the leading Run, as `collie run checks` gives `running` (with its `log` and `lastLines`), or `null`.                                                                                      |
+| `reopened`                   | A finished Run whose agent took a steer after it ended: the `delivery`, the `agent`, the first line it was `told` and its `status` now; else `null`.                                                                      |
+| `projectId`, `membershipSeq` | The Project the Task is filed into, qualified by the installation that owns it, or `null`; and the version of that membership a `task file --expected` names. `project` above stays the display label.                    |
+| `following`                  | `true` where the operator follows the Task, so it is in the Following filter of its board. Absent from an older host.                                                                                                     |
+| `run`, `runs[]`              | The Run a card acts on, and every Run of the Task.                                                                                                                                                                        |
+| `flow`                       | The card's **Flow** strip: `glyphs`, the leading Run's then the Release row's, `release`, how many are the Release row's, and `current`, or `null`.                                                                       |
 
 A fan-out finds its plan from its work source even where the kind was never recorded with
 its input, as for an implement Run started from a plan's end menu: a plan directory is the

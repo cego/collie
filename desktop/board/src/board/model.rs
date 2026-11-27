@@ -4,7 +4,7 @@
 
 use collie_desktop_protocol::generated::{
     Credential, FlockItem, Herd, Link, LostMachine, LostState, Machine, Message, Onboarding, Part,
-    Reading, Run, State, Task,
+    Project, Reading, Run, State, Task,
 };
 use std::collections::HashMap;
 
@@ -15,6 +15,8 @@ pub struct Shown {
     pub machine: Machine,
     pub herds: Vec<Herd>,
     pub cards: Vec<Task>,
+    /// The Projects that Machine owns, as its last board said.
+    pub projects: Vec<Project>,
     pub as_of: Option<f64>,
     pub build: Option<String>,
     pub development: Option<String>,
@@ -193,6 +195,7 @@ pub fn apply_item(machines: &mut Vec<Shown>, flock: &mut Flock, item: FlockItem)
                 machine: saved.machine,
                 herds: saved.herds,
                 cards: saved.tasks,
+                projects: Vec::new(),
                 as_of: Some(saved.at),
                 build: saved.build.flatten(),
                 development: saved.development.flatten(),
@@ -220,16 +223,18 @@ pub fn apply_item(machines: &mut Vec<Shown>, flock: &mut Flock, item: FlockItem)
                 .position(|m| m.machine.installation == machine.installation);
             let known = at.map(|at| machines[at].clone());
             let mut cards = known.as_ref().map(|k| k.cards.clone()).unwrap_or_default();
-            let (mut herds, mut build, mut development, mut protocol, mut files) = match &known {
-                Some(k) => (
-                    k.herds.clone(),
-                    k.build.clone(),
-                    k.development.clone(),
-                    k.protocol,
-                    k.files,
-                ),
-                None => (Vec::new(), None, None, None, false),
-            };
+            let (mut herds, mut build, mut development, mut protocol, mut files, mut projects) =
+                match &known {
+                    Some(k) => (
+                        k.herds.clone(),
+                        k.build.clone(),
+                        k.development.clone(),
+                        k.protocol,
+                        k.files,
+                        k.projects.clone(),
+                    ),
+                    None => (Vec::new(), None, None, None, false, Vec::new()),
+                };
             match said.message {
                 Message::UnknownMessage(_) => return,
                 Message::Snapshot(snapshot) => {
@@ -239,6 +244,7 @@ pub fn apply_item(machines: &mut Vec<Shown>, flock: &mut Flock, item: FlockItem)
                     development = snapshot.development;
                     protocol = Some(snapshot.protocol);
                     files = snapshot.files == Some(true);
+                    projects = snapshot.projects.unwrap_or_default();
                 }
                 Message::Upsert(upsert) => {
                     match cards.iter_mut().find(|c| c.id == upsert.task.id) {
@@ -247,12 +253,14 @@ pub fn apply_item(machines: &mut Vec<Shown>, flock: &mut Flock, item: FlockItem)
                     }
                 }
                 Message::Remove(remove) => cards.retain(|c| c.id != remove.id),
+                Message::Projects(changed) => projects = changed.projects,
             }
             flock.lost.remove(&machine.profile);
             let shown = Shown {
                 machine,
                 herds,
                 cards,
+                projects,
                 as_of: None,
                 build,
                 development,
@@ -368,6 +376,105 @@ pub fn placed(machines: &[Shown]) -> Vec<Placed<'_>> {
     all
 }
 
+/// A Project's identity across the Flock: two Machines' Projects may share an id.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Scope {
+    pub installation: String,
+    pub id: String,
+}
+impl Scope {
+    pub fn key(&self) -> String {
+        format!("{}:{}", self.installation, self.id)
+    }
+}
+/// A Project row of the sidebar, and the Machine that owns it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProjectRow<'a> {
+    pub installation: &'a str,
+    pub project: &'a Project,
+}
+impl ProjectRow<'_> {
+    pub fn scope(&self) -> Scope {
+        Scope {
+            installation: self.installation.to_string(),
+            id: self.project.id.clone(),
+        }
+    }
+    pub fn key(&self) -> String {
+        format!("project-{}-{}", self.installation, self.project.id)
+    }
+}
+fn by_name(a: &ProjectRow<'_>, b: &ProjectRow<'_>) -> std::cmp::Ordering {
+    let (a, b) = (a.project.name.to_lowercase(), b.project.name.to_lowercase());
+    a.cmp(&b).then_with(|| a.len().cmp(&b.len()))
+}
+fn starred_first(a: &ProjectRow<'_>, b: &ProjectRow<'_>) -> std::cmp::Ordering {
+    b.project
+        .starred
+        .cmp(&a.project.starred)
+        .then_with(|| by_name(a, b))
+}
+/// The Projects the sidebar draws: the live ones starred first then by name, and the archived
+/// ones apart, so putting a Project away never reorders the ones left.
+pub fn project_rows(machines: &[Shown]) -> (Vec<ProjectRow<'_>>, Vec<ProjectRow<'_>>) {
+    let rows: Vec<ProjectRow<'_>> = machines
+        .iter()
+        .flat_map(|shown| {
+            shown.projects.iter().map(|project| ProjectRow {
+                installation: shown.machine.installation.as_str(),
+                project,
+            })
+        })
+        .collect();
+    let mut live: Vec<ProjectRow<'_>> = rows
+        .iter()
+        .filter(|row| !row.project.archived)
+        .cloned()
+        .collect();
+    let mut archived: Vec<ProjectRow<'_>> = rows
+        .iter()
+        .filter(|row| row.project.archived)
+        .cloned()
+        .collect();
+    live.sort_by(starred_first);
+    archived.sort_by(by_name);
+    (live, archived)
+}
+/// Every Task in `scope`, and following ones only where the operator asked for those: the order
+/// is the board's own, so a Task that moves section moves with it.
+pub fn scoped<'a>(
+    machines: &'a [Shown],
+    scope: Option<&Scope>,
+    following: bool,
+) -> Vec<Placed<'a>> {
+    let mut all = placed(machines);
+    all.retain(|one| {
+        let inside = match scope {
+            None => true,
+            Some(scope) => {
+                one.installation == scope.installation
+                    && one
+                        .task
+                        .project_id
+                        .as_ref()
+                        .and_then(|one| one.as_ref())
+                        .is_some_and(|project| {
+                            project.installation == scope.installation && project.id == scope.id
+                        })
+            }
+        };
+        inside && (!following || one.task.following == Some(true))
+    });
+    all
+}
+/// The Tasks of `scope` that need the operator, counted once each however many Runs or
+/// questions they carry, as its sidebar badge says.
+pub fn needs_of(machines: &[Shown], scope: &Scope) -> usize {
+    scoped(machines, Some(scope), false)
+        .into_iter()
+        .filter(|one| section_of(one.task) == Section::NeedsYou)
+        .count()
+}
 /// The board's six sections, in the order it draws them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {

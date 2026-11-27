@@ -1230,6 +1230,26 @@ card names its Machine. An Unseen card is drawn above the collapsed Finished lis
 and an **Acknowledge** button; opening its record or pressing Acknowledge tells its Machine it
 was seen, which clears it on every Desktop and board.
 
+### Projects, Following and the archive
+
+The sidebar lists the **Projects** one Machine made, below the pages and above Settings,
+which stays at the foot however long the list runs. Choose one and the board shows only its
+Tasks, and the sidebar keeps that Project's place, its Following and its chat as you left
+them; **Board** is one press away and comes back to the whole Flock, and choosing the
+Project again returns to what you had there.
+A Project's toolbar carries the controls for that Project, beside the Following switch:
+**New Project** names one on this computer, **Star** moves it to the top of the list without
+changing what is filed into it, and **Archive** puts it away. An archived Project is listed
+apart, under **Archive**, until **Restore** brings it back — the same Project, with the same
+Tasks and Runs. Archiving is not deleting: its Runs keep going, and anything waiting on you
+stays in **Needs you** on the global board, so putting the Project away never hides a
+question. Each Project's row carries the number of its Tasks that need you, counted once per
+Task however many Runs or questions it has.
+**Following** narrows the board in the scope you are in — the whole Flock or one Project —
+to the Tasks you follow. Following is your interest, not a decision: a followed Task stays
+in whichever section its state puts it in, so it moves from Working to Needs you when it
+needs you, on both boards.
+
 Each card's **Flow** strip sits under its sentence: the leading Run's Steps, a gap,
 then the release. The glyphs show their states and the label names the current Step.
 With more than ten Steps, done Steps fold into one counted glyph; release glyphs stay

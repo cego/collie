@@ -8,6 +8,8 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Reactivity from "effect/reactivity/Reactivity";
 import * as SqlClient from "effect/sql/SqlClient";
 import { TaskWrites } from "./store-writes";
+import type { ProjectRef } from "./project";
+import { ProjectRef as ProjectRefSchema } from "./project";
 import { nowIso } from "./time";
 
 export const TaskSchema = Schema.Struct({
@@ -23,6 +25,12 @@ export const TaskSchema = Schema.Struct({
   instruction: Schema.optionalKey(Schema.String),
   // WARNING: a queued Task has no Run; this is what tells it from one whose Runs are all gone.
   queued_at: Schema.optionalKey(Schema.String),
+  // WARNING: absent means unassigned, and older records are all unassigned.
+  project: Schema.optionalKey(Schema.NullOr(ProjectRefSchema)),
+  // WARNING: bumped by every filing or move, so a stale one is refused rather than applied.
+  membership_seq: Schema.optionalKey(Schema.Finite),
+  followed_at: Schema.optionalKey(Schema.String),
+  followed_by: Schema.optionalKey(Schema.String),
 });
 export type TaskRecord = Schema.Schema.Type<typeof TaskSchema>;
 
@@ -111,6 +119,88 @@ export const listTasks = Tasks.use((tasks) => tasks.list);
 export const isOpen = (task: TaskRecord) => task.workspace === null && task.closed_at === undefined;
 
 export const isQueued = (task: TaskRecord) => task.queued_at !== undefined;
+export const isFollowing = (task: TaskRecord) => task.followed_at !== undefined;
+export const membershipOf = (task: TaskRecord) => ({
+  project: task.project ?? null,
+  seq: task.membership_seq ?? 0,
+});
+export interface Membership {
+  readonly project: ProjectRef | null;
+  readonly seq: number;
+}
+export const FilingSchema = Schema.Struct({
+  task: Schema.String,
+  result: Schema.Literals(["filed", "already", "stale", "archived", "missing"]),
+  // WARNING: what the entry left behind, or what it found instead when it was stale.
+  membership: Schema.Struct({ project: Schema.NullOr(ProjectRefSchema), seq: Schema.Finite }),
+});
+export type Filing = typeof FilingSchema.Type;
+export const sameProject = (a: ProjectRef | null, b: ProjectRef | null) =>
+  a === null ? b === null : b !== null && a.installation === b.installation && a.id === b.id;
+// WARNING: an expected seq is the operator's view of the membership; a move that names another loses to the one that won.
+export const fileTask = (opts: {
+  readonly id: string;
+  readonly project: ProjectRef | null;
+  readonly expected?: number | undefined;
+}) =>
+  Tasks.use((tasks) =>
+    tasks.locked(
+      opts.id,
+      Effect.gen(function* () {
+        const task = yield* tasks.get(opts.id);
+        if (task === null) {
+          return {
+            task: opts.id,
+            result: "missing",
+            membership: { project: null, seq: 0 },
+          } satisfies Filing;
+        }
+        const current = membershipOf(task);
+        if (opts.expected !== undefined && opts.expected !== current.seq) {
+          return { task: opts.id, result: "stale", membership: current } satisfies Filing;
+        }
+        if (sameProject(current.project, opts.project)) {
+          return { task: opts.id, result: "already", membership: current } satisfies Filing;
+        }
+        const next = {
+          ...task,
+          project: opts.project,
+          membership_seq: current.seq + 1,
+        } satisfies TaskRecord;
+        yield* tasks.put(next);
+        return { task: opts.id, result: "filed", membership: membershipOf(next) } satisfies Filing;
+      }),
+    ),
+  );
+export const followTask = (id: string, by: string) =>
+  Tasks.use((tasks) =>
+    tasks.locked(
+      id,
+      Effect.gen(function* () {
+        const task = yield* tasks.get(id);
+        return task === null
+          ? null
+          : yield* tasks.put({ ...task, followed_at: yield* nowIso, followed_by: by });
+      }),
+    ),
+  );
+export const unfollowTask = (id: string) =>
+  Tasks.use((tasks) =>
+    tasks.locked(
+      id,
+      Effect.gen(function* () {
+        const task = yield* tasks.get(id);
+        if (task === null) {
+          return null;
+        }
+        // WARNING: the key goes, not to undefined: a Task's JSON refuses undefined where a string is optional.
+        const next = { ...task };
+        delete next.followed_at;
+        delete next.followed_by;
+        return yield* tasks.put(next);
+      }),
+    ),
+  );
 
 export const queuedLabel = (instruction: string) =>
   pipe_(Str.split(Str.trim(instruction), "\n")[0] ?? "", Str.slice(0, 72));

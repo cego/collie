@@ -20,6 +20,7 @@ import { ScheduleChange, ScheduleChanged, ScheduleListing } from "./schedule-mod
 import { Park } from "./park-cause";
 import { VerifyEvent, Pass, PrepareSchema, VerificationSchema } from "./verify-model";
 import { MeasureEvent } from "./measurement-model";
+import { FilingSchema } from "./task";
 
 export { PASSES, Pass } from "./verify-model";
 import { IntentChangeSchema, ChangedIntent } from "./intent-model";
@@ -457,8 +458,25 @@ export const TaskView = Schema.Struct({
   asOf: Schema.optionalKey(Schema.Finite),
   // WARNING: a queued Task has no Run yet, so no field here stands for one.
   queued: Schema.optionalKey(Schema.Boolean),
+  // WARNING: null is unassigned; `project` stays the display label the workspace gave it.
+  projectId: Schema.optionalKey(
+    Schema.NullOr(Schema.Struct({ installation: Schema.String, id: Schema.String })),
+  ),
+  membershipSeq: Schema.optionalKey(Schema.Finite),
+  following: Schema.optionalKey(Schema.Boolean),
 });
 export type TaskView = typeof TaskView.Type;
+export const ProjectView = Schema.Struct({
+  installation: Schema.String,
+  id: Schema.String,
+  name: Schema.String,
+  starred: Schema.Boolean,
+  archived: Schema.Boolean,
+  tasks: Schema.Finite,
+  // WARNING: Tasks that need the operator, counted once each however many Runs or questions they carry.
+  needs: Schema.Finite,
+});
+export type ProjectView = typeof ProjectView.Type;
 
 export const Panel = Schema.Union([
   Schema.TaggedStruct("None", { reason: Schema.String }),
@@ -1002,6 +1020,7 @@ export const BoardSnapshot = Schema.TaggedStruct("Snapshot", {
   files: Schema.optionalKey(Schema.Boolean),
   artefacts: Schema.optionalKey(Schema.Boolean),
   herds: Schema.Array(Herd),
+  projects: Schema.optionalKey(Schema.Array(ProjectView)),
   tasks: Schema.Array(TaskView),
   seq: Schema.Int,
 });
@@ -1012,8 +1031,19 @@ export type TaskUpserted = typeof TaskUpserted.Type;
 
 export const TaskRemoved = Schema.TaggedStruct("Remove", { seq: Schema.Int, id: Schema.String });
 export type TaskRemoved = typeof TaskRemoved.Type;
+export const ProjectsChanged = Schema.TaggedStruct("Projects", {
+  seq: Schema.Int,
+  projects: Schema.Array(ProjectView),
+});
+export type ProjectsChanged = typeof ProjectsChanged.Type;
 
-const KNOWN_MESSAGES: ReadonlySet<string> = new Set(["Snapshot", "Upsert", "Remove", "Unknown"]);
+const KNOWN_MESSAGES: ReadonlySet<string> = new Set([
+  "Snapshot",
+  "Upsert",
+  "Remove",
+  "Projects",
+  "Unknown",
+]);
 
 export const UnknownMessage = Schema.Struct({
   _tag: Schema.String.pipe(Schema.check(Schema.makeFilter((tag) => !KNOWN_MESSAGES.has(tag)))),
@@ -1038,6 +1068,7 @@ export const BoardMessage = Schema.Union([
   BoardSnapshot,
   TaskUpserted,
   TaskRemoved,
+  ProjectsChanged,
   UnknownMessage,
 ]);
 export type BoardMessage = typeof BoardMessage.Type;
@@ -1187,6 +1218,9 @@ export const ActionResult = Schema.Struct({
   revision: Schema.optionalKey(RunRevision),
   // WARNING: the Task a create_task queued, so its caller can start it without reading the board.
   task: Schema.optionalKey(Schema.String),
+  project: Schema.optionalKey(Schema.String),
+  // WARNING: one entry per Task a filing was asked about, so a caller retries exactly the ones that did not land.
+  filed: Schema.optionalKey(Schema.Array(FilingSchema)),
 });
 export type ActionResult = typeof ActionResult.Type;
 
@@ -2664,6 +2698,35 @@ export const SECTIONS: ReadonlyArray<readonly [Section, string]> = [
   ["queued", "Queued"],
   ["finished", "Finished"],
 ];
+export interface ProjectFacts {
+  readonly id: string;
+  readonly name: string;
+  readonly starred?: boolean;
+  readonly archived?: boolean;
+}
+// WARNING: counted per Task, so two questions on one Task add one to Needs you.
+export function projectViews(options: {
+  readonly installation: string;
+  readonly projects: ReadonlyArray<ProjectFacts>;
+  readonly views: ReadonlyArray<TaskView>;
+}) {
+  return Arr.map(options.projects, (project) => {
+    const mine = Arr.filter(
+      options.views,
+      (view) =>
+        view.projectId?.installation === options.installation && view.projectId.id === project.id,
+    );
+    return {
+      installation: options.installation,
+      id: project.id,
+      name: project.name,
+      starred: project.starred === true,
+      archived: project.archived === true,
+      tasks: mine.length,
+      needs: Arr.filter(mine, (view) => sectionOf(view) === "needs-you").length,
+    } satisfies ProjectView;
+  });
+}
 const SECTION_ORDER = new Map(Arr.map(SECTIONS, ([section], at) => [section, at]));
 const STATE_RANK = new Map<TaskState, number>(Arr.map(STATE_ORDER, (state, at) => [state, at]));
 

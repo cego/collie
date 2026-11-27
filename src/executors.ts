@@ -5,10 +5,15 @@ import type { Effect } from "effect";
 import type { Action, ActionKind } from "./actions";
 import type { Actor } from "./proposals";
 import type { PluginEnv } from "./env";
+import type { Filing } from "./task";
 
-export type ExecutionResult =
-  | { readonly state: "applied"; readonly note?: string; readonly task?: string }
-  | { readonly state: "failed"; readonly note: string };
+export interface ExecutionResult {
+  readonly state: "applied" | "failed";
+  readonly note?: string;
+  readonly task?: string;
+  readonly project?: string;
+  readonly filed?: ReadonlyArray<Filing>;
+}
 
 export type Executor<K extends ActionKind> = (
   action: Extract<Action, { kind: K }>,
