@@ -347,6 +347,7 @@ const olderDispatch = (runId: string) =>
     workflow: "agent-work",
     harness: "claude",
     outputSubmit: "file",
+    step: { step: "review", place: null, key: "review" },
   }).pipe(Effect.provide(recordsAt(dir)));
 
 const started = (runId: string, skip = false) =>
@@ -9642,6 +9643,119 @@ test("a pre-upgrade launch is collected from its file though the Workflow names 
       expect(result._tag).toBe("Success");
       expect(yield* read(promptPath("r1"))).toContain("OUTPUT_PATH");
       expect(yield* read(promptPath("r1"))).not.toContain("collie_submit");
+    }),
+  ));
+
+const replayAsk = () => ({
+  runId: "r1",
+  operation: "review",
+  role: "reviewer",
+  workflow: "agent-work",
+  harness: "opencode" as const,
+  agent: null,
+  model: "anthropic/claude-opus-4-1",
+  effort: null,
+  permissions: null,
+  task: null,
+  cwd: rig.projectDir,
+  prompt: "Review the diff.",
+  output: outputPath("r1"),
+  skill: null,
+});
+
+const settledReplay = (runId: string) =>
+  Effect.gen(function* () {
+    const ask = replayAsk();
+    yield* session(
+      Effect.gen(function* () {
+        const agents = yield* Agents;
+        return yield* agents.launch(ask, undefined, undefined, true);
+      }),
+    );
+    const at = (yield* readLaunches(runId).pipe(Effect.provide(recordsAt(dir))))[0]?.at;
+    expect(at).toBeNumber();
+    yield* awaitOutput(runId, agentFor(runId), ask.output, () => null, `review@${at}`);
+    expect(
+      yield* submitOutput(runId, agentFor(runId), { verdict: "clean", note: "handed in" }),
+    ).toBe("accepted");
+  });
+
+test("a replay whose core cannot say what it has reads the accepted Output instead of parking", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* settledReplay("r1");
+      const outcome = yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          return yield* agents.launch(replayAsk(), undefined, undefined, true).pipe(Effect.result);
+        }),
+        { herdr: new Refusing({ "terminal.list": "core is not answering" }) },
+      );
+      expect(outcome._tag).toBe("Success");
+      expect(yield* controlOf(PARK_CAUSE, "r1")).not.toBe("herdr-unavailable");
+    }),
+  ));
+
+test("an Output accepted while a replay waits for memory is read without a second prompt", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const ask = replayAsk();
+      yield* recordLaunch({
+        agent: agentFor("r1"),
+        output: ask.output,
+        reused: false,
+        runId: "r1",
+        operation: "review",
+        role: "reviewer",
+        workflow: "agent-work",
+        harness: "opencode",
+        outputSubmit: "tool",
+        at: 1000,
+      }).pipe(Effect.provide(recordsAt(dir)));
+      yield* awaitOutput("r1", agentFor("r1"), ask.output, () => null, "review@1000");
+      yield* rig.memory(0.1);
+      const outcome = yield* session(
+        Effect.gen(function* () {
+          const agents = yield* Agents;
+          const fiber = yield* Effect.forkChild(
+            agents.launch(ask, undefined, undefined, true).pipe(Effect.result),
+          );
+          yield* until(Effect.map(memoryWaitOf("r1"), (waiting) => waiting !== null));
+          expect(
+            yield* submitOutput("r1", agentFor("r1"), { verdict: "clean", note: "handed in" }),
+          ).toBe("accepted");
+          yield* rig.memory(50);
+          return yield* Fiber.join(fiber);
+        }),
+        { env: rig.pluginEnv({ COLLIE_MEMORY_EVERY: "50 millis" }) },
+      );
+      expect(outcome._tag).toBe("Success");
+      expect(yield* read(promptPath("r1"))).toBe("");
+    }),
+  ));
+
+test("a keyed step is not finished by an unkeyed launch's file, and its submit finishes it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* recordLaunch({
+        agent: agentFor("r1"),
+        output: outputPath("r1"),
+        reused: false,
+        runId: "r1",
+        operation: "review",
+        role: "reviewer",
+        workflow: "agent-work",
+        harness: "claude",
+        outputSubmit: "file",
+      }).pipe(Effect.provide(recordsAt(dir)));
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${dir}/agents/r1`, { recursive: true });
+      yield* fs.writeFileString(outputPath("r1"), `{"verdict":"findings","note":"from the file"}`);
+      yield* rig.queueOutputs([{ verdict: "clean", note: "from the submit" }]);
+      const result = yield* session(stepped.execute(steppedPayload("r1")).pipe(Effect.result));
+      expect(result._tag).toBe("Success");
+      expect(result._tag === "Success" ? result.success.note : null).toBe("from the submit");
+      expect(yield* read(promptPath("r1"))).toContain("collie_submit");
     }),
   ));
 

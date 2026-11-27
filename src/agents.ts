@@ -2795,6 +2795,27 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
   ) =>
     under(
       Effect.gen(function* () {
+        // WARNING: A dispatch's time is fixed the first time it is recorded, so a replay and a revived agent stay the same round.
+        const fixed = Option.getOrUndefined(
+          Arr.findLast(
+            yield* launchesOf(ask.runId),
+            (one) =>
+              stemOf(one) === stemOf(ask) &&
+              keyOf(one) === keyOf(ask) &&
+              one.agent === agent &&
+              one.output === ask.output,
+          ),
+        );
+        // WARNING: read before core is asked anything, so a replay of a step that already handed in never parks on it.
+        if (settle && fixed !== undefined) {
+          const settled = yield* outputOf(
+            yield* RunRecords,
+            stepOf([fixed], ask.runId, ask.operation, ask.output),
+          );
+          if (settled !== null) {
+            return fixed;
+          }
+        }
         const listedAt = yield* nowIso;
         const listing = yield* host.herdr.agentList().pipe(Effect.result);
         if (listing._tag === "Failure") {
@@ -2822,7 +2843,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           );
         }
         if (live !== undefined && (yield* retireLost(ask, agent, listing.success))) {
-          return yield* launch(ask, false, note, armed);
+          return yield* launch(ask, false, note, armed, settle);
         }
         const alive = live !== undefined && !fresh;
         // WARNING: a launch from before this build has a tool server without collie_submit, so it is ended and started again on its session.
@@ -2852,12 +2873,12 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
             ask.runId,
             `${agent}: launched before this build, so it was ended and started again${launchedBefore?.agentSession == null ? " with no session to resume" : " on its session"}`,
           );
-          return yield* launch(ask, true, note, armed);
+          return yield* launch(ask, true, note, armed, settle);
         }
         const back = live === undefined ? comingBack.get(agent) : undefined;
         if (back !== undefined) {
           yield* Deferred.await(back);
-          return yield* launch(ask, false, note, armed);
+          return yield* launch(ask, false, note, armed, settle);
         }
         if (alive) {
           yield* stepGoneOut(agent);
@@ -2885,30 +2906,10 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               stopped: stoppedRun(ask.runId),
             });
         if (memory === "waited") {
-          return yield* launch(ask, fresh, note, armed);
+          return yield* launch(ask, fresh, note, armed, settle);
         }
         const replayed = yield* wasOrdered(ask);
-        // WARNING: A dispatch's time is fixed the first time it is recorded, so a replay and a revived agent stay the same round.
-        const sameDispatch = Option.getOrUndefined(
-          Arr.findLast(
-            yield* launchesOf(ask.runId),
-            (one) =>
-              stemOf(one) === stemOf(ask) &&
-              keyOf(one) === keyOf(ask) &&
-              one.agent === agent &&
-              one.output === ask.output,
-          ),
-        );
-        const stamped = sameDispatch?.at ?? (yield* Clock.currentTimeMillis);
-        if (settle && sameDispatch !== undefined) {
-          const settled = yield* outputOf(
-            yield* RunRecords,
-            stepOf([sameDispatch], ask.runId, ask.operation, ask.output),
-          );
-          if (settled !== null) {
-            return sameDispatch;
-          }
-        }
+        const stamped = fixed?.at ?? (yield* Clock.currentTimeMillis);
         const landedOn = (incarnation: Rooted | undefined, chosen: AgentSession | null = null) => {
           const landed: Types.Mutable<Launched> = {
             agent,
@@ -3092,7 +3093,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
               ask.runId,
               `${agent}: ${asked.why} before it was given ${ask.operation}; starting it again`,
             );
-            return yield* launch(ask, true, note, armed);
+            return yield* launch(ask, true, note, armed, settle);
           }
           if (again._tag === "Success") {
             asked = yield* deliver(launched, pointer, {
@@ -4651,9 +4652,7 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
           const last = Option.getOrUndefined(
             Arr.findLast(
               known,
-              (one) =>
-                one.operation === operation &&
-                (key === undefined || one.step?.key === undefined || one.step.key === key),
+              (one) => one.operation === operation && (key === undefined || one.step?.key === key),
             ),
           );
           // WARNING: a launch from before submit mode existed wrote its Output to a file, so no mode means file.
