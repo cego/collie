@@ -4404,6 +4404,35 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
       ", ",
     );
 
+  const heldDelivery = (runId: string, request: string) =>
+    Effect.map(deliveriesOf(runId), (lines) =>
+      Option.getOrNull(
+        Arr.findFirst(
+          lines,
+          (one) =>
+            one.cause.kind === "steer" &&
+            one.cause.ref === request &&
+            !Arr.contains(["failed", "superseded"], one.state),
+        ),
+      ),
+    );
+
+  const acceptedDelivery = (runId: string, request: string) =>
+    Effect.gen(function* () {
+      const held = yield* heldDelivery(runId, request);
+      if (held === null) {
+        return null;
+      }
+      if (SENT_STATES.has(held.state)) {
+        return held;
+      }
+      if (!(yield* dispatch.settleFromSubmit(host.env.stateDir, held))) {
+        return null;
+      }
+      const settled = { ...held, state: "acknowledged" as const };
+      return settled;
+    });
+
   const unresolvedRefusal = (
     previous: { readonly id: string; readonly state: string },
     candidates: ReadonlyArray<{ readonly agent: string; readonly role: string }>,
@@ -4440,6 +4469,17 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
         );
         if (queued?.result != null) {
           return queued.result;
+        }
+        const accepted = yield* acceptedDelivery(options.runId, options.request);
+        if (accepted !== null) {
+          const result = receipt(accepted.agent, {
+            id: accepted.id,
+            observed: accepted.state === "acknowledged" ? "taken when it was first sent" : null,
+          });
+          if (queued !== undefined) {
+            yield* keepQueued(dirFor(options.runId), { ...queued, result }).pipe(Effect.orDie);
+          }
+          return result;
         }
         const candidates = yield* candidatesOf(options.runId);
         const listed = yield* listedAgents();
@@ -4556,36 +4596,14 @@ const makeAgents: (host: AgentHost, under: Under, collecting: CollectingApi) => 
                 "Queued durably; the host will deliver when this agent is idle, without answering its Run's choices.",
             };
           }
-          const held = Option.getOrUndefined(
-            Arr.findFirst(
-              yield* deliveriesOf(options.runId),
-              (one) =>
-                one.cause.kind === "steer" &&
-                one.cause.ref === options.request &&
-                !Arr.contains(["failed", "superseded"], one.state),
-            ),
-          );
-          const previous =
-            held === undefined ||
-            SENT_STATES.has(held.state) ||
-            !(yield* dispatch.settleFromSubmit(host.env.stateDir, held))
-              ? held
-              : { ...held, state: "acknowledged" as const };
-          if (previous !== undefined) {
+          const held = yield* heldDelivery(options.runId, options.request);
+          if (held !== null) {
             // WARNING: an unresolved receipt stays queued without a result, so a later recheck can settle it from evidence alone.
-            if (!SENT_STATES.has(previous.state)) {
-              return {
-                agent: previous.agent,
-                delivered: false,
-                detail: yield* unresolvedRefusal(previous, candidates),
-              };
-            }
-            const result = receipt(previous.agent, {
-              id: previous.id,
-              observed: previous.state === "acknowledged" ? "taken when it was first sent" : null,
-            });
-            yield* keepQueued(dirFor(options.runId), { ...pending, result }).pipe(Effect.orDie);
-            return result;
+            return {
+              agent: held.agent,
+              delivered: false,
+              detail: yield* unresolvedRefusal(held, candidates),
+            };
           }
         }
         const sent = yield* deliver(launched, pending.text, {

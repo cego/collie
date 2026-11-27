@@ -7363,6 +7363,96 @@ test("a queued Delivery left unknown settles when its exact submit arrives later
     }),
   ));
 
+test("an exact submit settles a queued Delivery while its target is working, without another send", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const outcome = yield* session(
+        Effect.gen(function* () {
+          core.refuse("terminal.send", "unreachable", "the core did not answer");
+          yield* say("r1", "stay in src", "steer-1");
+          core.restore("terminal.send");
+          const lost = Option.getOrThrow(
+            Arr.head(
+              Arr.filter(
+                yield* deliveredTo(dir, "r1"),
+                (one) => one.cause.kind === "steer" && one.state === "unknown",
+              ),
+            ),
+          );
+          yield* keepQueued(`${dir}/agents/r1`, {
+            runId: "r1",
+            request: "steer-1",
+            text: "stay in src",
+            result: null,
+          });
+          yield* core.report(lost.agent, "working");
+          yield* recordClaudeEvent(
+            yield* controlDir(rig.pluginEnv().stateDir, lost.agent),
+            flow(
+              Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+              Result.getOrThrow,
+            )({
+              session_id: lost.agent,
+              hook_event_name: "UserPromptSubmit",
+              prompt: marked("stay in src", lost.id),
+            }),
+            lost.incarnation,
+          ).pipe(Effect.orDie);
+          return { sent: yield* say("r1", "stay in src", "steer-1"), lost };
+        }),
+      );
+      expect(outcome.sent).toMatchObject({
+        agent: outcome.lost.agent,
+        delivered: true,
+        delivery: outcome.lost.id,
+      });
+    }),
+  ));
+
+test("an exact submit settles a Delivery whose target has exited, instead of refusing it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const outcome = yield* session(
+        Effect.gen(function* () {
+          core.refuse("terminal.send", "unreachable", "the core did not answer");
+          yield* say("r1", "stay in src", "steer-1");
+          core.restore("terminal.send");
+          const lost = Option.getOrThrow(
+            Arr.head(
+              Arr.filter(
+                yield* deliveredTo(dir, "r1"),
+                (one) => one.cause.kind === "steer" && one.state === "unknown",
+              ),
+            ),
+          );
+          yield* core.exit(lost.agent, 0);
+          yield* recordClaudeEvent(
+            yield* controlDir(rig.pluginEnv().stateDir, lost.agent),
+            flow(
+              Schema.encodeResult(Schema.fromJsonString(Schema.Unknown)),
+              Result.getOrThrow,
+            )({
+              session_id: lost.agent,
+              hook_event_name: "UserPromptSubmit",
+              prompt: marked("stay in src", lost.id),
+            }),
+            lost.incarnation,
+          ).pipe(Effect.orDie);
+          return { sent: yield* say("r1", "stay in src", "steer-1"), lost };
+        }),
+      );
+      expect(outcome.sent).toMatchObject({
+        agent: outcome.lost.agent,
+        delivered: true,
+        delivery: outcome.lost.id,
+      });
+    }),
+  ));
+
 test("an idle Codex takes a now message through the supported boundary transport", () =>
   runEffect(
     Effect.gen(function* () {
