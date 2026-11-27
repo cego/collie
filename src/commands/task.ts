@@ -1,9 +1,10 @@
 import * as Arr from "effect/Array";
 import { Effect } from "effect";
-import { Command } from "effect/cli";
+import { Command, Flag } from "effect/cli";
 import { listRuns } from "../runs";
-import { hostTasks } from "../lifecycle";
-import { answering } from "./shared";
+import { actAsked, hostTasks } from "../lifecycle";
+import { err } from "../operations";
+import { answering, cliDoor, mutating, requestIdFlag } from "./shared";
 
 const list = Command.make("list", {}, () =>
   answering((env) =>
@@ -34,7 +35,50 @@ const list = Command.make("list", {}, () =>
   ),
 ).pipe(Command.withDescription("Every Task, its workspace and the Runs it owns"));
 
+const create = Command.make(
+  "create",
+  {
+    instruction: Flag.String("instruction").pipe(
+      Flag.withDescription("What the Task is for, in the operator's own words"),
+    ),
+    label: Flag.String("label").pipe(
+      Flag.withDescription("What the board calls it; the first line of the instruction by default"),
+      Flag.optional,
+    ),
+    requestId: requestIdFlag,
+  },
+  ({ instruction, label, requestId }) =>
+    mutating(
+      {
+        operation: "create_task",
+        run: null,
+        args: { instruction, label: label._tag === "Some" ? label.value : "" },
+      },
+      requestId,
+      (env, id) =>
+        Effect.gen(function* () {
+          const [done] = yield* actAsked(env, {
+            door: yield* cliDoor(env),
+            actions: [
+              label._tag === "Some"
+                ? { kind: "create_task" as const, instruction, label: label.value }
+                : { kind: "create_task" as const, instruction },
+            ],
+            request: id,
+          });
+          if (done === undefined || done.state !== "applied" || done.task === undefined) {
+            return err("operation_failed", done?.note || "The host did not queue a Task.");
+          }
+          return {
+            ok: true as const,
+            data: { task: done.task },
+            human: `Queued ${done.task}: ${instruction}`,
+          };
+        }),
+    ),
+).pipe(Command.withDescription("Queue a Task from one instruction, before any Run exists"));
+
 export const task = Command.make("task").pipe(
   Command.withDescription("The Tasks a Run can be started into"),
-  Command.withSubcommands([list]),
+  Command.withSubcommands([list, create]),
 );

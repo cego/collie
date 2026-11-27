@@ -324,7 +324,7 @@ import { StartedSchema } from "./automode";
 import type { RunAuthority, Started } from "./automode";
 import { WorktreeRecordSchema } from "./run";
 import type { WorktreeRecord } from "./run";
-import { isOpen, listTasks, newTask, readTask, taskOfWorkspace, writeTask } from "./task";
+import { isOpen, isQueued, listTasks, newTask, readTask, taskOfWorkspace, writeTask } from "./task";
 import { nowIso, epochMs, isoAt } from "./time";
 import {
   pauseBefore,
@@ -8671,6 +8671,18 @@ const makeRegistry: (
       }
     }
     if (ask.taskLabel === undefined) {
+      // WARNING: the first Run of a queued Task adopts where it was placed; until then the Task had none.
+      const queued =
+        ask.task == null ? null : yield* readTask(ask.task).pipe(Effect.orElseSucceed(() => null));
+      if (queued !== null && isQueued(queued)) {
+        const { queued_at: _, ...placedTask } = queued;
+        yield* writeTask({
+          ...placedTask,
+          workspace: opened?.id ?? ask.workspace ?? null,
+          cwd: placed.cwd,
+          root_pane: opened === null ? null : (placed.worktree?.root_pane_id ?? null),
+        }).pipe(Effect.orElseSucceed(() => queued));
+      }
       return { placed, task: ask.task };
     }
     // WARNING: a start about a Task's work joins that Task's workspace, wherever it came from.

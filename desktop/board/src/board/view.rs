@@ -489,6 +489,12 @@ fn section_title(k: &Kit, section: Section, count: usize, note: Option<String>) 
         Section::NeedsYou => k.c.warning,
         Section::ReadyToShip | Section::Waiting => collie_desktop_theme::tones(k.dark).ready,
         Section::Working => k.c.info,
+        Section::Queued => StateColors {
+            bg: k.c.layer_02,
+            fg: k.c.text_muted,
+            border: k.c.border_weak,
+            icon: k.c.icon_muted,
+        },
         Section::Finished => k.c.success,
     };
     row()
@@ -691,6 +697,7 @@ fn card(
     let task = p.task;
     let key = p.key.clone();
     let live = p.as_of.is_none();
+    let queued = task.queued == Some(true);
     let selected = app
         .chat
         .about
@@ -749,8 +756,8 @@ fn card(
     let mut status = row().key("status").w_full().gap(6.0).center_y().child(pill(
         k,
         "state",
-        cards::state_label(&task.state),
-        state_tone(k, &task.state),
+        cards::card_state_label(task),
+        if queued { None } else { state_tone(k, &task.state) },
     ));
     if task.unseen == Some(true) {
         status = status.child(
@@ -771,18 +778,26 @@ fn card(
                 .shrink(),
         );
     }
-    let head = row()
-        .w_full()
-        .items_start()
-        .gap(6.0)
-        .child(
-            col()
-                .grow(1.0)
-                .shrink()
-                .gap(6.0)
-                .child({
-                    // The name always opens its record, a saved card's too, as stable's does.
-                    let opens = key.clone();
+    let head = row().w_full().items_start().gap(6.0).child(
+        col()
+            .grow(1.0)
+            .shrink()
+            .gap(6.0)
+            .child({
+                // The name always opens its record, a saved card's too, as stable's does.
+                let opens = key.clone();
+                let name = text(task.name.clone())
+                    .key("name")
+                    .font(k.ty.ui_medium)
+                    .color(c.text_strong)
+                    .wrap()
+                    .max_lines(2)
+                    .w_full()
+                    .a11y_hidden();
+                // WARNING: a queued Task has no record to open, so its name is only its name.
+                if queued {
+                    el().key(format!("{id}-name")).w_full().child(name)
+                } else {
                     el().key(format!("{id}-name"))
                         .w_full()
                         .radius(4.0)
@@ -793,20 +808,16 @@ fn card(
                         .role("button")
                         .label(task.name.clone())
                         .on_press(move |app: &mut App| app.open_card(&opens))
-                        .child(
-                            text(task.name.clone())
-                                .key("name")
-                                .font(k.ty.ui_medium)
-                                .color(c.text_strong)
-                                .wrap()
-                                .max_lines(2)
-                                .w_full()
-                                .a11y_hidden(),
-                        )
-                })
-                .child(status.a11y_hidden()),
-        )
-        .child(el().mt(-3.0).mr(-4.0).child(menu));
+                        .child(name)
+                }
+            })
+            .child(status.a11y_hidden()),
+    );
+    let head = if queued {
+        head
+    } else {
+        head.child(el().mt(-3.0).mr(-4.0).child(menu))
+    };
 
     let (fill, edge) = if task.state == State::Blocked {
         // Opaque, so the card's shadow does not show through its wash.
@@ -1127,6 +1138,7 @@ fn card(
         n => Some(format!("{n} agents")),
     };
     let foot: Vec<String> = [
+        queued.then(|| "0 Runs".to_string()),
         (!p.place.is_empty()).then(|| p.place.clone()),
         Some(task.age.clone()),
         // A card the host served from its last projection says when it was derived.
@@ -1183,11 +1195,28 @@ fn card(
     let (press, double, enter) = (key.clone(), key.clone(), key.clone());
     let card = card
         .key(id.to_string())
-        .on_press(move |app: &mut App| app.click_card(&press, false))
-        .on_double_press(move |app: &mut App| app.click_card(&double, true))
+        .on_press(move |app: &mut App| {
+            if !app
+                .placed_by(&press)
+                .is_some_and(|p| p.task.queued == Some(true))
+            {
+                app.click_card(&press, false)
+            }
+        })
+        .on_double_press(move |app: &mut App| {
+            if !app
+                .placed_by(&double)
+                .is_some_and(|p| p.task.queued == Some(true))
+            {
+                app.click_card(&double, true)
+            }
+        })
         .focusable(true)
         .on_key(move |app: &mut App, pressed: &rune::KeyEvent, _| {
-            if pressed.key == Key::Enter && app.placed_by(&enter).is_some_and(|p| p.as_of.is_none())
+            if pressed.key == Key::Enter
+                && app
+                    .placed_by(&enter)
+                    .is_some_and(|p| p.as_of.is_none() && p.task.queued != Some(true))
             {
                 app.open_card(&enter);
                 return true;

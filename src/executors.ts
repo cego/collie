@@ -7,7 +7,7 @@ import type { Actor } from "./proposals";
 import type { PluginEnv } from "./env";
 
 export type ExecutionResult =
-  | { readonly state: "applied"; readonly note?: string }
+  | { readonly state: "applied"; readonly note?: string; readonly task?: string }
   | { readonly state: "failed"; readonly note: string };
 
 export type Executor<K extends ActionKind> = (

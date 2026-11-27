@@ -5,9 +5,11 @@
 use collie_desktop_board::board::answers::{
     Answering, Condition, Now, Sitting, answer_key, card_question,
 };
-use collie_desktop_board::board::cards::{CardAction, CardMr, card_actions, card_flow, card_mrs};
+use collie_desktop_board::board::cards::{
+    CardAction, CardMr, card_actions, card_flow, card_mrs, primary_action,
+};
 use collie_desktop_board::board::model::{
-    Flock, Shown, apply_item, fallback_line, placed, reaching, reaching_said,
+    Flock, Section, Shown, apply_item, fallback_line, placed, reaching, reaching_said, section_of,
 };
 use collie_desktop_board::board::questionnaire::{Does, Event, HOLD, Questionnaire, Where};
 use collie_desktop_board::board::{backoff, renewal_due};
@@ -726,5 +728,34 @@ fn a_card_names_where_a_fallback_would_move_its_runs_work() {
     assert_eq!(
         fallback_line(&of(json!([agent("build", "r-1", None)]))),
         None
+    );
+}
+
+#[test]
+fn a_queued_task_is_its_own_section_with_nothing_to_open() {
+    let said = "Make the refunds page say a duplicate arrives twice";
+    let card: Task = serde_json::from_value(task(
+        "t-queued",
+        "quiet",
+        json!({"queued": true, "run": "", "runs": [], "sentence": said}),
+    ))
+    .unwrap();
+    assert_eq!(Section::Queued.label(), "Queued");
+    assert_eq!(Section::Queued.key(), "queued");
+    assert_eq!(section_of(&card), Section::Queued);
+    assert_eq!(card.sentence, said);
+    assert!(card_actions(&card).is_empty());
+    assert!(primary_action(&card).is_none());
+}
+
+#[test]
+fn a_card_from_a_host_before_queued_tasks_still_sits_where_it_did() {
+    let older = task("t-old", "active", json!({"at": 2.0}));
+    let card: Task = serde_json::from_value(older.clone()).unwrap();
+    assert_eq!(card.queued, None);
+    assert_eq!(section_of(&card), Section::Working);
+    assert_eq!(
+        where_(vec![snapshot(pc(), vec![older], default_herd())]),
+        pairs(&[("t-old", "")])
     );
 }

@@ -603,6 +603,7 @@ const NOT_ABOUT_A_RUN: ReadonlySet<ActionKind> = new Set([
   "ask_human",
   "none",
   "start",
+  "create_task",
   "update_defaults",
   "fork_definition",
   "home_cleanup",

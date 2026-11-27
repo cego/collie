@@ -74,9 +74,16 @@ export const ActionSchema = Schema.Union([
     decisions: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
     // WARNING: optional in the schema, but a start without one is refused rather than rooted where the agent asks.
     workspace: Schema.optionalKey(Schema.String),
+    // WARNING: a Task named here is started into, never a new one opened beside it.
+    task: Schema.optionalKey(Schema.String),
     title: Schema.optionalKey(Schema.String),
     verify: Schema.optionalKey(Schema.Array(VerifySpecSchema)),
     attachments: Schema.optionalKey(Attachments),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("create_task"),
+    instruction: Schema.String,
+    label: Schema.optionalKey(Schema.String),
   }),
   Schema.Struct({ kind: Schema.Literal("resume"), run: Schema.String }),
   Schema.Struct({

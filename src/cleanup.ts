@@ -866,6 +866,7 @@ const SECTION_SAID: Record<Section, string> = {
   "ready-to-ship": "ready to ship",
   waiting: "waiting on you",
   working: "working",
+  queued: "queued",
   finished: "Finished",
 };
 

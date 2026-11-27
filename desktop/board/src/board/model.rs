@@ -368,22 +368,24 @@ pub fn placed(machines: &[Shown]) -> Vec<Placed<'_>> {
     all
 }
 
-/// The board's five sections, in the order it draws them.
+/// The board's six sections, in the order it draws them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
     NeedsYou,
     ReadyToShip,
     Waiting,
     Working,
+    Queued,
     Finished,
 }
 
 impl Section {
-    pub const ALL: [Section; 5] = [
+    pub const ALL: [Section; 6] = [
         Section::NeedsYou,
         Section::ReadyToShip,
         Section::Waiting,
         Section::Working,
+        Section::Queued,
         Section::Finished,
     ];
     pub fn label(self) -> &'static str {
@@ -392,6 +394,7 @@ impl Section {
             Section::ReadyToShip => "Ready to ship",
             Section::Waiting => "Waiting on you",
             Section::Working => "Working",
+            Section::Queued => "Queued",
             Section::Finished => "Finished",
         }
     }
@@ -401,6 +404,7 @@ impl Section {
             Section::ReadyToShip => "ready-to-ship",
             Section::Waiting => "waiting",
             Section::Working => "working",
+            Section::Queued => "queued",
             Section::Finished => "finished",
         }
     }
@@ -412,6 +416,9 @@ impl Section {
 /// A decision beats liveness, liveness beats history, and history is split by whether the
 /// work landed. Work its host found ready to ship is a section of its own.
 pub fn section_of(task: &Task) -> Section {
+    if task.queued == Some(true) {
+        return Section::Queued;
+    }
     let shipping = matches!(task.shipping, Some(Some(_)));
     match task.state {
         State::Blocked if shipping => Section::ReadyToShip,

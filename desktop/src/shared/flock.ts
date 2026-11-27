@@ -67,6 +67,15 @@ export type MachineMessage = typeof MachineMessage.Type;
 export const NotLive = Schema.Literals(["unreachable", "sso", "no-collie", "update-desktop"]);
 export type NotLive = typeof NotLive.Type;
 
+export const QUEUE_KIND = "create_task";
+
+// WARNING: a host older than queued Tasks takes no create_task, so its refusal is about its build, not the request.
+export const queueRefusal = (reason: string) =>
+  Str.includes(`"${QUEUE_KIND}"`)(reason) && Str.includes("not a kind Collie takes")(reason);
+
+export const queueUnsupported = (machine: string) =>
+  `${machine}'s Collie is older than this Desktop: it cannot queue a Task. Update Collie on ${machine}, then ask again.`;
+
 export const NOT_LIVE: Record<NotLive, { icon: string; title: (name: string) => string }> = {
   unreachable: { icon: "i-lucide-unplug", title: (name) => `${name} is out of reach` },
   sso: { icon: "i-lucide-key-round", title: (name) => `Waiting for SSO login on ${name}` },

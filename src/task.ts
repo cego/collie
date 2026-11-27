@@ -19,6 +19,10 @@ export const TaskSchema = Schema.Struct({
   herd: Schema.optionalKey(Schema.NullOr(Schema.String)),
   created_at: Schema.String,
   closed_at: Schema.optionalKey(Schema.String),
+  // WARNING: what the operator asked for before any Run existed, kept as they wrote it.
+  instruction: Schema.optionalKey(Schema.String),
+  // WARNING: a queued Task has no Run; this is what tells it from one whose Runs are all gone.
+  queued_at: Schema.optionalKey(Schema.String),
 });
 export type TaskRecord = Schema.Schema.Type<typeof TaskSchema>;
 
@@ -106,6 +110,11 @@ export const listTasks = Tasks.use((tasks) => tasks.list);
 
 export const isOpen = (task: TaskRecord) => task.workspace === null && task.closed_at === undefined;
 
+export const isQueued = (task: TaskRecord) => task.queued_at !== undefined;
+
+export const queuedLabel = (instruction: string) =>
+  pipe_(Str.split(Str.trim(instruction), "\n")[0] ?? "", Str.slice(0, 72));
+
 export const taskOfWorkspace = (workspaceId: string | null) =>
   workspaceId ? Tasks.use((tasks) => tasks.ofWorkspace(workspaceId)) : Effect.succeed(null);
 
@@ -134,5 +143,25 @@ export const newTask = Effect.fn("task.newTask")(function* (opts: {
     root_pane: opts.rootPane ?? null,
     herd: opts.herd,
     created_at: yield* nowIso,
+  } satisfies TaskRecord;
+});
+
+export const newQueuedTask = Effect.fn("task.newQueuedTask")(function* (opts: {
+  readonly instruction: string;
+  readonly label?: string | undefined;
+  readonly cwd: string;
+  readonly herd?: string | null;
+}) {
+  const now = yield* nowIso;
+  return {
+    id: `task-${pipe_(yield* (yield* SecureRandom.SecureRandom).uuidV4(), Str.slice(0, 8))}`,
+    workspace: null,
+    label: opts.label ?? queuedLabel(opts.instruction),
+    cwd: opts.cwd,
+    root_pane: null,
+    herd: opts.herd ?? null,
+    created_at: now,
+    instruction: opts.instruction,
+    queued_at: now,
   } satisfies TaskRecord;
 });

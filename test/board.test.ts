@@ -597,6 +597,7 @@ test("the sections are what the search left", () => {
     needs: [],
     ready: [],
     working: [],
+    queued: [],
     waiting: [],
     finished: [views[1]!],
   });
@@ -3984,12 +3985,14 @@ test("the sections come out in the board's order, and ready work has its own sec
     }),
     task({ id: "recent", state: "done", landed: false, ended: 2 }),
     task({ id: "blocked", state: "blocked", decision: QUESTION }),
+    task({ id: "queued", state: "quiet", queued: true }),
   ]);
   expect(Arr.map(views, (view) => view.id)).toEqual([
     "blocked",
     "older-ready",
     "recent",
     "working",
+    "queued",
     "done",
   ]);
   expect(Arr.map(SECTIONS, ([section]) => section)).toEqual([
@@ -3997,6 +4000,7 @@ test("the sections come out in the board's order, and ready work has its own sec
     "ready-to-ship",
     "waiting",
     "working",
+    "queued",
     "finished",
   ]);
 });

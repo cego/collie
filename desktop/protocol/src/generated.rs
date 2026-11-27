@@ -155,6 +155,8 @@ pub struct Task {
     pub confirmed: Option<bool>,
     #[serde(rename = "asOf", default, skip_serializing_if = "Option::is_none")]
     pub as_of: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

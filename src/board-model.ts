@@ -455,6 +455,8 @@ export const TaskView = Schema.Struct({
   // WARNING: absent means confirmed, as an older host writes it.
   confirmed: Schema.optionalKey(Schema.Boolean),
   asOf: Schema.optionalKey(Schema.Finite),
+  // WARNING: a queued Task has no Run yet, so no field here stands for one.
+  queued: Schema.optionalKey(Schema.Boolean),
 });
 export type TaskView = typeof TaskView.Type;
 
@@ -1183,6 +1185,8 @@ export const ActionResult = Schema.Struct({
   state: Schema.String,
   note: Schema.String,
   revision: Schema.optionalKey(RunRevision),
+  // WARNING: the Task a create_task queued, so its caller can start it without reading the board.
+  task: Schema.optionalKey(Schema.String),
 });
 export type ActionResult = typeof ActionResult.Type;
 
@@ -2509,6 +2513,11 @@ export function disposeLabel(action: DisposeAction) {
 }
 
 export function cardActions(view: TaskView) {
+  // WARNING: a queued Task has no Run to open, steer, hold or stop.
+  if (view.queued === true) {
+    const none: Array<CardAction> = [];
+    return none;
+  }
   const actions: Array<CardAction> = [{ kind: "go-to-tab" }];
   if (!isSettled(view.state)) {
     actions.push({ kind: "steer" }, { kind: "attach" });
@@ -2540,6 +2549,10 @@ export function cardActions(view: TaskView) {
 }
 
 export function primaryAction(view: TaskView) {
+  if (view.queued === true) {
+    const returned: CardAction | null = null;
+    return returned;
+  }
   if (view.decision !== null) {
     const returned: CardAction | null = null;
     return returned;
@@ -2618,7 +2631,7 @@ export function dispositionActions(view: TaskView) {
   return Arr.map(kinds, (kind) => dispose(view, kind));
 }
 
-export type Section = "needs-you" | "ready-to-ship" | "working" | "waiting" | "finished";
+export type Section = "needs-you" | "ready-to-ship" | "working" | "queued" | "waiting" | "finished";
 
 export function shippingLabel(view: Pick<TaskView, "shipping" | "offer">) {
   if (view.shipping == null) {
@@ -2630,7 +2643,10 @@ export function shippingLabel(view: Pick<TaskView, "shipping" | "offer">) {
   return view.shipping === "stage" ? "Stage: " : "Deploy: ";
 }
 
-export function sectionOf(view: Pick<TaskView, "state" | "landed" | "shipping">) {
+export function sectionOf(view: Pick<TaskView, "state" | "landed" | "shipping" | "queued">) {
+  if (view.queued === true) {
+    return "queued";
+  }
   if (view.state === "blocked") {
     return view.shipping == null ? "needs-you" : "ready-to-ship";
   }
@@ -2645,6 +2661,7 @@ export const SECTIONS: ReadonlyArray<readonly [Section, string]> = [
   ["ready-to-ship", "Ready to ship"],
   ["waiting", "Waiting on you"],
   ["working", "Working"],
+  ["queued", "Queued"],
   ["finished", "Finished"],
 ];
 const SECTION_ORDER = new Map(Arr.map(SECTIONS, ([section], at) => [section, at]));
@@ -2667,6 +2684,7 @@ export interface Sections {
   needs: Array<TaskView>;
   ready: Array<TaskView>;
   working: Array<TaskView>;
+  queued: Array<TaskView>;
   waiting: Array<TaskView>;
   finished: Array<TaskView>;
 }
@@ -2709,6 +2727,7 @@ export function sectionsOf(views: ReadonlyArray<TaskView>, query: string) {
     needs: Arr.filter(found, (view) => sectionOf(view) === "needs-you"),
     ready: Arr.filter(found, (view) => sectionOf(view) === "ready-to-ship"),
     working: Arr.filter(found, (view) => sectionOf(view) === "working"),
+    queued: Arr.filter(found, (view) => sectionOf(view) === "queued"),
     waiting: Arr.filter(found, (view) => sectionOf(view) === "waiting"),
     finished: Arr.filter(found, (view) => sectionOf(view) === "finished"),
   };

@@ -851,3 +851,34 @@ test("a client subscribed before a month-old card is read and pruned is told it 
       expect(next).toMatchObject({ _tag: "Remove", id: card!.id });
     }),
   ));
+
+test("a Task queued while a client watches reaches it without a refresh", () =>
+  proves(
+    "collie-board-queued-",
+    (world) =>
+      Effect.gen(function* () {
+        yield* collie(world, ["board"]);
+        const door = yield* frontDoor(socketOf(world.state)).pipe(Effect.orDie);
+        const opened = yield* Deferred.make<BoardSnapshot>();
+        const reading = yield* door.board().pipe(
+          Stream.tap((message) =>
+            message._tag === "Snapshot" ? Deferred.succeed(opened, message) : Effect.void,
+          ),
+          Stream.filter((message) => message._tag === "Upsert" && message.task.queued === true),
+          Stream.runHead,
+          Effect.forkScoped,
+        );
+        yield* Deferred.await(opened);
+        const made = yield* collie(world, [
+          "task",
+          "create",
+          "--instruction",
+          "Watch the duplicate refunds",
+        ]);
+        expect(made.envelope.ok).toBe(true);
+        const arrived = yield* Fiber.join(reading).pipe(Effect.timeout("20 seconds"));
+        expect(arrived._tag).toBe("Some");
+        expect(arrived._tag === "Some" ? arrived.value._tag : "none").toBe("Upsert");
+      }),
+    [],
+  ));

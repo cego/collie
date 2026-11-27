@@ -34,7 +34,7 @@ import type { AgentEntry } from "./registry";
 import { listRuns, newestFirst, settled as ended } from "./runs";
 import type { RunFacts, RunState } from "./runs";
 import type { PluginEnv } from "./env";
-import { listTasks } from "./task";
+import { isQueued, listTasks } from "./task";
 import type { TaskRecord } from "./task";
 import { ago, agoMs, agoShort, spanned, epochMs } from "./time";
 import {
@@ -741,6 +741,48 @@ function namesOf(label: string, run: RunFacts) {
 function basename(path: string) {
   return Str.split(pipe(path, Str.replace(/\/+$/, "")), "/").at(-1) ?? path;
 }
+
+const queuedNames = (task: TaskRecord) => {
+  const clean = withoutPaths(Str.trim(task.label));
+  const at = Option.getOrElse(pipe(clean, Str.indexOf(" | ")), () => -1);
+  return at < 0
+    ? { project: basename(task.cwd), name: clean }
+    : { project: pipe(clean, Str.slice(0, at)), name: pipe(clean, Str.slice(at + 3)) };
+};
+
+// WARNING: a queued Task has no Run, so nothing of a live card is invented for it.
+const queuedView = (task: TaskRecord, now: number) => {
+  const created = epochMs(task.created_at);
+  const { project, name } = queuedNames(task);
+  const view: TaskView = {
+    id: task.id,
+    name,
+    project,
+    state: "quiet",
+    steps: [],
+    sentence: task.instruction ?? task.label,
+    age: agoShort(Number.isNaN(created) ? 0 : created, now),
+    drift: null,
+    held: null,
+    heldBy: null,
+    decision: null,
+    agents: [],
+    children: [],
+    mr: null,
+    branch: null,
+    disposition: null,
+    landed: false,
+    ended: null,
+    mrState: null,
+    planReady: false,
+    offer: null,
+    run: "",
+    runs: [],
+    at: Number.isNaN(created) ? now : created,
+    queued: true,
+  };
+  return task.herd ? { ...view, herd: task.herd } : view;
+};
 
 const BUILDER_ROLE = "implementer";
 
@@ -2190,7 +2232,15 @@ const drawBoard = Effect.fn("Board.draw")(function* (opts: BoardOptions, whole: 
       }
     }
   }
-  return sortBoard(Arr.filter(views, (view) => view !== null));
+  return sortBoard([
+    ...(opts.only === undefined
+      ? Arr.map(
+          Arr.filter([...tasks.values()], (task) => isQueued(task) && !groups.has(task.id)),
+          (task) => queuedView(task, now),
+        )
+      : []),
+    ...Arr.filter(views, (view) => view !== null),
+  ]);
 });
 
 export const taskCardOf = Effect.fn("Board.taskCard")(function* (
@@ -2290,6 +2340,7 @@ export function boardLines(
     "ready-to-ship": (rows) => `Ready to ship · ${rows.length}`,
     waiting: waitingLabel,
     working: workingLabel,
+    queued: (rows) => `Queued · ${rows.length}`,
     finished: (rows) => finishedLabel(rows, true),
   };
   return Arr.flatMap(SECTIONS, ([section]) => {

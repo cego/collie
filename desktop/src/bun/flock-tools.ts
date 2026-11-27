@@ -44,7 +44,7 @@ import type { FlockSearch } from "../../../src/artefact-search";
 import type { Staged } from "../shared/attachments";
 import { runsAsOffered } from "../shared/chat-choices";
 import type { ChatChoices, Resolved } from "../shared/chat-choices";
-import { unreadBecause } from "../shared/flock";
+import { QUEUE_KIND, queueRefusal, queueUnsupported, unreadBecause } from "../shared/flock";
 import type { ActionFailed, ChatBoard } from "../shared/flock";
 import { moveSchedule } from "../../../src/schedule-move";
 import type { ScheduleDoor } from "../../../src/schedule-move";
@@ -1117,7 +1117,15 @@ const carryOut = Effect.fn("FlockTools.do")(function* (flock: FlockChat, input: 
                 : new HostRefused({ reason: done.note }),
           ),
         ),
-    ).pipe(Effect.catch((error) => Effect.succeed(endedAs(error))));
+    ).pipe(
+      Effect.catch((error) =>
+        Effect.succeed(
+          kind === QUEUE_KIND && queueRefusal(reasonOf(error))
+            ? { state: "failed", note: queueUnsupported(machine.name) }
+            : endedAs(error),
+        ),
+      ),
+    );
     said.push(`${kind}: ${done.state}${done.note ? ` — ${done.note}` : ""}`);
     if (done.state === "not confirmed") {
       unconfirmed = true;

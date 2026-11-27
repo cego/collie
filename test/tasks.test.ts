@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Deferred, Effect, Fiber, FileSystem, Order, Result, Schema, Stream } from "effect";
 import * as Reactivity from "effect/reactivity/Reactivity";
@@ -16,8 +17,12 @@ import type { TaskRecord } from "../src/task";
 import { TaskWrites } from "../src/store-writes";
 import { runEffect } from "./support/effect";
 import { recordsAt } from "./support/records";
-import { stopHost } from "./support/host";
+import { stopHost, until } from "./support/host";
 import { collie, proves } from "./support/world";
+import type { World } from "./support/world";
+import { cardActions, sectionOf, TaskView } from "../src/board-model";
+import { frontDoor, socketOf } from "../src/host";
+import { Database } from "bun:sqlite";
 
 const asJson = (task: TaskRecord) =>
   Result.getOrThrow(Schema.encodeResult(Schema.fromJsonString(TaskSchema))(task));
@@ -214,4 +219,205 @@ test("run hold --task holds every unfinished Run of that Task and none of anothe
         ).toEqual(Arr.sort([first, second], Order.String));
       }),
     ["asks.workflow.ts"],
+  ));
+
+const Board = Schema.Struct({ tasks: Schema.Array(TaskView) });
+
+const boardOf = (world: World) =>
+  collie(world, ["board"]).pipe(
+    Effect.flatMap(({ envelope }) =>
+      Schema.decodeUnknownEffect(Board)(envelope.data).pipe(Effect.orDie),
+    ),
+  );
+
+const created = (world: World, instruction: string, more: ReadonlyArray<string> = []) =>
+  collie(world, ["task", "create", "--instruction", instruction, ...more]).pipe(
+    Effect.flatMap(({ envelope }) =>
+      Schema.decodeUnknownEffect(Schema.Struct({ task: Schema.String }))(envelope.data),
+    ),
+    Effect.map(({ task }) => task),
+    Effect.orDie,
+  );
+
+const cardOf = (world: World, id: string) =>
+  Effect.map(boardOf(world), (board) =>
+    Option.getOrNull(Arr.findFirst(board.tasks, (one) => one.id === id)),
+  );
+
+test("a Task queued from one instruction is on the board after a restart, with no Run or pane action", () =>
+  proves(
+    "collie-task-queued-",
+    (world) =>
+      Effect.gen(function* () {
+        const id = yield* created(world, "Make the refunds page say a duplicate arrives twice");
+        yield* stopHost(world.state);
+        const queued = yield* cardOf(world, id);
+        expect(queued?.queued).toBe(true);
+        expect(queued?.sentence).toBe("Make the refunds page say a duplicate arrives twice");
+        expect(queued?.name).toBe("Make the refunds page say a duplicate arrives twice");
+        expect(queued?.runs).toEqual([]);
+        expect(queued?.agents).toEqual([]);
+        expect(queued === null ? "missing" : sectionOf(queued)).toBe("queued");
+        expect(
+          queued === null ? ["missing"] : Arr.map(cardActions(queued), (one) => one.kind),
+        ).toEqual([]);
+      }),
+    [],
+  ));
+
+test("two submissions of one create request are one queued Task", () =>
+  proves(
+    "collie-task-once-",
+    (world) =>
+      Effect.gen(function* () {
+        yield* collie(world, ["board"]);
+        const door = yield* frontDoor(socketOf(world.state));
+        const asked = {
+          actions: [{ kind: "create_task", instruction: "Tidy the refunds copy" }],
+          request: "create-1",
+        };
+        const [first] = yield* door.act(asked);
+        const [again] = yield* door.act(asked);
+        expect(first?.state).toBe("applied");
+        expect(first?.task).toBeString();
+        expect(again?.task).toBe(first?.task);
+        const listed = yield* collie(world, ["task", "list"]);
+        const { tasks } = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ tasks: Schema.Array(Schema.Struct({ id: Schema.String })) }),
+        )(listed.envelope.data).pipe(Effect.orDie);
+        expect(Arr.map(tasks, (one) => one.id)).toEqual([first!.task!]);
+      }),
+    [],
+  ));
+
+test("a queued Task takes one first Run on its chosen checkout, and its card leaves Queued", () =>
+  proves(
+    "collie-task-start-",
+    (world) =>
+      Effect.gen(function* () {
+        const checkout = `${world.project}-chosen`;
+        yield* Effect.sync(() => Bun.spawnSync(["git", "init", "-q", checkout]));
+        const id = yield* created(world, "Ship the duplicate refunds notice");
+        const door = yield* frontDoor(socketOf(world.state));
+        const started = yield* door.start({
+          project: checkout,
+          id: "plain",
+          request: "start-1",
+          input: { note: "hi" },
+          task: id,
+        });
+        yield* stopHost(world.state);
+        yield* boardOf(world);
+        const again = yield* (yield* frontDoor(socketOf(world.state))).start({
+          project: checkout,
+          id: "plain",
+          request: "start-1",
+          input: { note: "hi" },
+          task: id,
+        });
+        expect(again.runId).toBe(started.runId);
+        expect(again.fresh).toBe(false);
+        const shown = yield* collie(world, ["run", "show", started.runId]);
+        expect(shown.envelope.data).toMatchObject({
+          run: { task: id, cwd: checkout },
+        });
+        const card = yield* cardOf(world, id);
+        expect(card?.queued ?? false).toBe(false);
+        expect(card?.run).toBe(started.runId);
+      }),
+    ["plain.workflow.ts"],
+  ));
+
+test("a queued Task older than any Run is kept by a sweep and still takes a first Run", () =>
+  proves(
+    "collie-task-aged-",
+    (world) =>
+      Effect.gen(function* () {
+        yield* boardOf(world);
+        yield* stopHost(world.state);
+        const db = new Database(`${world.state}/host.db`);
+        db.run(`INSERT INTO collie_tasks (id, record) VALUES (?, ?)`, [
+          "task-aged",
+          asJson({
+            id: "task-aged",
+            workspace: null,
+            label: "Aged refund copy",
+            cwd: world.project,
+            created_at: "2020-01-01T00:00:00.000Z",
+            instruction: "Aged refund copy",
+            queued_at: "2020-01-01T00:00:00.000Z",
+          }),
+        ]);
+        db.close();
+        const swept = yield* collie(world, ["cleanup", "--apply"]);
+        expect(swept.envelope.ok).toBe(true);
+        expect((yield* cardOf(world, "task-aged"))?.queued).toBe(true);
+        const started = yield* collie(world, [
+          "run",
+          "start",
+          "plain",
+          "--task",
+          "task-aged",
+          "--input",
+          "note=hi",
+        ]);
+        expect(started.envelope.ok).toBe(true);
+      }),
+    ["plain.workflow.ts"],
+  ));
+
+test("a pre-feature database still opens its Run, keeps its Tasks and acts on the same installation", () =>
+  proves(
+    "collie-task-upgrade-",
+    (world) =>
+      Effect.gen(function* () {
+        const started = yield* collie(world, ["run", "start", "plain", "--input", "note=hi"]);
+        const { runId } = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ runId: Schema.String }),
+        )(started.envelope.data).pipe(Effect.orDie);
+        yield* collie(world, ["run", "wait", runId]);
+        const task = yield* collie(world, ["run", "show", runId]).pipe(
+          Effect.flatMap(({ envelope }) =>
+            Schema.decodeUnknownEffect(
+              Schema.Struct({ run: Schema.Struct({ task: Schema.String }) }),
+            )(envelope.data),
+          ),
+          Effect.map(({ run }) => run.task),
+          Effect.orDie,
+        );
+        const cardsBefore = (yield* boardOf(world)).tasks.length;
+        yield* stopHost(world.state);
+        const db = new Database(`${world.state}/host.db`);
+        // WARNING: what a host before queued Tasks left: no instruction, no queued_at, and Runs that name no Task.
+        db.run(`UPDATE collie_tasks SET record = ? WHERE id = ?`, [
+          asJson({
+            id: task,
+            workspace: null,
+            label: "Plain | Older record",
+            cwd: world.project,
+            created_at: "2026-01-01T00:00:00.000Z",
+            closed_at: "2026-01-02T00:00:00.000Z",
+          }),
+          task,
+        ]);
+        db.run(`UPDATE collie_runs SET task = NULL WHERE run = ?`, [runId]);
+        const cleared = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ task: Schema.NullOr(Schema.String) }),
+        )(db.query(`SELECT task FROM collie_runs WHERE run = ?`).get(runId)).pipe(Effect.orDie);
+        db.close();
+        expect(cleared.task).toBeNull();
+        // WARNING: the last host's cards stand until the first pass confirms the record it now sees.
+        const board = yield* until(
+          () => boardOf(world),
+          (read) => Arr.some(read.tasks, (one) => one.id === runId),
+        );
+        expect(cardsBefore).toBeGreaterThan(0);
+        expect(Arr.map(board.tasks, (one) => one.id)).toContain(runId);
+        expect(Arr.some(board.tasks, (one) => one.queued === true)).toBe(false);
+        const shown = yield* collie(world, ["run", "show", runId]);
+        expect(shown.envelope).toMatchObject({ ok: true });
+        const acted = yield* collie(world, ["run", "disposition", runId, "--as", "abandoned"]);
+        expect(acted.envelope).toMatchObject({ ok: true });
+      }),
+    ["plain.workflow.ts"],
   ));

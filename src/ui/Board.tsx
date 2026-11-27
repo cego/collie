@@ -82,6 +82,7 @@ export function Board(props: BoardProps) {
     props.sections.needs.length +
       props.sections.ready.length +
       props.sections.working.length +
+      props.sections.queued.length +
       props.sections.waiting.length +
       props.sections.finished.length ===
     0;
@@ -186,6 +187,23 @@ export function Board(props: BoardProps) {
           </Section>
         </Show>
       </>
+    ),
+    queued: () => (
+      <Show when={props.sections.queued.length > 0}>
+        <Section label={`Queued · ${props.sections.queued.length}`}>
+          <Grid
+            views={props.sections.queued}
+            columns={props.columns}
+            width={props.width - 2 * SIDE}
+            open={props.open}
+            onOpen={props.onOpen}
+            onMenu={props.onMenu}
+            onAct={props.onAct}
+            decide={props.decide}
+            batch={props.batch}
+          />
+        </Section>
+      </Show>
     ),
     finished: () => (
       <>

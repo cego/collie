@@ -8,6 +8,7 @@ import { Effect, Option, Schema } from "effect";
 import { hostname } from "node:os";
 import type { PlatformError } from "effect/PlatformError";
 import { reason } from "./naming";
+import { once } from "./audit";
 import type { PlatformServices } from "./platform";
 import type { Records } from "./records";
 import { executorFor, registerExecutor, registeredKinds } from "./executors";
@@ -36,7 +37,7 @@ import { humanBytes } from "./bytes";
 import { agentStartRefusal, CHAT_CHECKOUT_FIX } from "./agent-start";
 import { RESERVED_INPUTS } from "./sdk";
 import { PROJECTS_ROOT_OPTION, projectsRoot, repositoryCheckout } from "./projects";
-import { isOpen, listTasks, removeTask } from "./task";
+import { isOpen, listTasks, newQueuedTask, readTask, removeTask, writeTask } from "./task";
 import { clearOverride, collieOwnRefusal, err, workspaceNamed } from "./operations";
 import type { Failure, OpResult } from "./operations";
 import { Herdr } from "./herdr";
@@ -77,7 +78,7 @@ import {
 import type { Actor, ProposalRecord } from "./proposals";
 import type { Action } from "./actions";
 import { ProposalRefused } from "./board-model";
-import type { ProposalCarried, StepResult } from "./board-model";
+import type { ActionResult, ProposalCarried, StepResult } from "./board-model";
 import { fingerprint } from "./verify";
 import { findRun } from "./runs";
 
@@ -339,6 +340,10 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   );
   registerExecutor("start", (action, by, env) =>
     Effect.gen(function* () {
+      const asked = action.task === undefined ? null : yield* readTask(action.task);
+      if (action.task !== undefined && asked === null) {
+        return failed(`no Task "${action.task}"`);
+      }
       const named = action.workspace ?? action.inputs.workspace;
       const atRoot =
         Option.getOrUndefined(
@@ -389,7 +394,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         request: by.requestId,
         input,
         options: launch,
-        task: { mode: "new" },
+        task: asked === null ? { mode: "new" } : { mode: "continue", task: asked },
         title: action.title,
         verify: action.verify,
         attachments: action.attachments,
@@ -407,6 +412,31 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           }
         : failed(started.error.message);
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
+  );
+  registerExecutor("create_task", (action, by, env) =>
+    Effect.gen(function* () {
+      const instruction = Str.trim(action.instruction);
+      if (instruction === "") {
+        return failed("create_task needs an instruction");
+      }
+      const asked = { instruction, label: action.label ?? null, cwd: env.cwd };
+      const made = yield* once(
+        env.stateDir,
+        {
+          operation: "create_task",
+          request: by.requestId,
+          ...by,
+          asked,
+          result: Schema.Struct({ task: Schema.String }),
+        },
+        Effect.gen(function* () {
+          const task = yield* newQueuedTask({ instruction, label: action.label, cwd: env.cwd });
+          const written = yield* writeTask(task);
+          return { task: written.id };
+        }),
+      );
+      return { state: "applied" as const, note: made.task, task: made.task };
+    }).pipe(Effect.catch((cause) => Effect.succeed(failed(reason(cause))))),
   );
   registerExecutor("update_defaults", (action, _by, env) =>
     Effect.gen(function* () {
@@ -750,7 +780,7 @@ export const carryOutAsked = Effect.fn("runActions.carryOutAsked")(function* (
   actor: Actor,
 ) {
   yield* registerRunExecutors();
-  const results: Array<{ kind: string; state: string; note: string }> = [];
+  const results: Array<{ kind: string; state: string; note: string; task?: string }> = [];
   for (const [index, action] of actions.entries()) {
     const executor = executorFor(action.kind);
     if (!executor) {
@@ -763,7 +793,12 @@ export const carryOutAsked = Effect.fn("runActions.carryOutAsked")(function* (
       continue;
     }
     const outcome = yield* executor(action, stepOf(actor, index), env);
-    results.push({ kind: action.kind, state: outcome.state, note: outcome.note ?? "" });
+    const said = { kind: action.kind, state: outcome.state, note: outcome.note ?? "" };
+    const result: ActionResult =
+      outcome.state === "applied" && outcome.task !== undefined
+        ? { ...said, task: outcome.task }
+        : said;
+    results.push(result);
     if (outcome.state === "failed") {
       break;
     }

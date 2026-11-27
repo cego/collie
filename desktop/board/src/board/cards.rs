@@ -276,6 +276,10 @@ fn dispose_each(one: &Mr, disposition: Disposition) -> CardAction {
 
 /// What this Task can be asked for, in the order a menu shows it.
 pub fn card_actions(task: &Task) -> Vec<CardAction> {
+    // WARNING: a queued Task has no Run to open, steer, hold or stop.
+    if task.queued == Some(true) {
+        return Vec::new();
+    }
     let mut actions = vec![CardAction::GoToTab];
     let settled = is_settled(&task.state);
     if !settled {
@@ -320,6 +324,9 @@ pub fn ships_by_merge(task: &Task) -> bool {
 
 /// The one action that ends a card's wait, drawn first on it.
 pub fn primary_action(task: &Task) -> Option<CardAction> {
+    if task.queued == Some(true) {
+        return None;
+    }
     if task.decision.is_some() {
         return None;
     }
@@ -620,6 +627,15 @@ pub fn state_label(state: &State) -> &'static str {
         State::Stopped => "Stopped",
         State::Abandoned => "Abandoned",
         State::Done => "Done",
+    }
+}
+
+/// A queued Task's own word: it has no Run whose state could be read.
+pub fn card_state_label(task: &Task) -> &'static str {
+    if task.queued == Some(true) {
+        "Queued"
+    } else {
+        state_label(&task.state)
     }
 }
 

@@ -653,8 +653,9 @@ matches a checkout runs there; one that matches none is cloned, as before.
 It is an application ([ADR-0005](adr/0005-collie-tab-is-an-application.md)), and it is a
 **board of Tasks, not a table of Runs**
 ([ADR-0013](adr/0013-the-board-is-cards-of-tasks.md)): one card per
-[Task](../CONTEXT.md), whatever Runs that Task took. A header sentence, then five sections:
-**Needs you**, **Ready to ship**, **Waiting on you**, **Working**, and **Finished**. A decision beats liveness, liveness beats history, and history is
+[Task](../CONTEXT.md), whatever Runs that Task took. A header sentence, then six sections:
+**Needs you**, **Ready to ship**, **Waiting on you**, **Working**, **Queued** (a Task queued
+from one instruction before any Run exists), and **Finished**. A decision beats liveness, liveness beats history, and history is
 split by whether the work **landed**. The order is the board model's own, and the text
 board and chat's `collie_herd` list the sections the same way.
 

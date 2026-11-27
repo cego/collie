@@ -464,7 +464,8 @@ export const CollieTools = Toolkit.make(
     title: "Do what the board does",
     description:
       "Carry out, at once, anything the board does: its own actions " +
-      `on a named Run (${Arr.join(ASKED_KINDS, ", ")}), and its decisions — ` +
+      `on a named Run (${Arr.join(ASKED_KINDS, ", ")}), \`create_task\` to queue a Task from one ` +
+      "instruction before any Run exists, and its decisions — " +
       "`confirm` a waiting proposal by its id and the hash `collie_receipts` lists beside " +
       "it, `decline` one by the same two, `disposition` to record what became of a finished Run's " +
       "work, and `seen` to acknowledge a finished Run's report for every board. " +
@@ -546,6 +547,9 @@ export const TAKES: Record<ToolName, string> = {
 const HERD_CARDS = 40;
 
 function cardLine(view: TaskView) {
+  if (view.queued === true) {
+    return `- task ${view.id}: ${view.name}${view.project === "" ? "" : ` (${view.project})`}, queued, no Run. ${view.sentence}`;
+  }
   const project = view.project === "" ? "" : ` (${view.project})`;
   const mrs = view.mrs ?? [];
   const where =

@@ -569,6 +569,18 @@ collie --json task list
 collie --json run start review --task task-1a2b3c4d --input target=worktree
 ```
 
+Queue a Task before any Run exists with `task create`, then start into it by id:
+
+```sh
+collie --json task create --instruction "Make the refunds page say when a duplicate arrives"
+collie --json run start implement --task task-1a2b3c4d --input goal="Make the refunds page say when a duplicate arrives"
+```
+
+A queued Task keeps the instruction as it was written, shows on the board under
+**Queued** with no Run to open, and has no checkout of its own: the start that gives it its
+first Run selects the Workflow and the checkout, and the Task takes that placement then.
+One `--request-id` is one Task, and the same start request is one Run, whichever retries it.
+
 `task list` gives the Task id, label and its Runs. Historical `workspace` fields remain
 readable; no external workspace is created. Labels come from the work and existing Task
 labels, and do not decide membership. A label you change is left alone.
@@ -876,7 +888,8 @@ core terminal runs, and a start made from it is placed as one from the Home. Wit
 ([ADR-0038](adr/0038-the-host-builds-and-serves-the-board.md)): every Task on this Herd's
 board, in the order the Home draws them: **Needs you**, **Ready to ship** (only the shipping
 go remains), **Waiting on you** (ended work still owed), **Working** (`active` and `quiet`),
-and **Finished** (landed), and inside each whatever changed last first. `state: blocked` puts a Task in Needs you unless its declared shipping Go still holds,
+**Queued** (a Task with no Run yet), and **Finished** (landed), and inside each whatever
+changed last first. `state: blocked` puts a Task in Needs you unless its declared shipping Go still holds,
 and it means one of two things: a `decision` to answer, or an agent waiting for you in its
 own pane — a harness dialog Collie cannot answer, or a run that parked because its agent's
 pane would not take a prompt. The `sentence` says which, and for the second kind it says which pane. It is the same model the pane renders, so an agent

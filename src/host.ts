@@ -1362,7 +1362,7 @@ class SteerUnanswered extends Schema.TaggedError<
   outcome: SteerOutcome,
 }) {}
 
-const ACTED_KINDS = new Set<string>([...ASKED_KINDS, "hold"]);
+const ACTED_KINDS = new Set<string>([...ASKED_KINDS, "hold", "create_task"]);
 const ACT_REVISIONS_KEPT = 1024;
 
 const outcomeOf: (result: OpResult) => SteerOutcome = (result) =>
