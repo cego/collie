@@ -62,7 +62,7 @@ import { RunPageAsked, RunSummary, pageOf, summaryOf } from "./run-list";
 import { recordsAt } from "./records";
 import type { Records } from "./records";
 import { RUN_RECORDS, RunRecords } from "./run-records";
-import { controlOf, controlSet } from "./controls";
+import { controlOf, controlSet, HOLD } from "./controls";
 import { FINISHED_STEPS, recordFlow, recordFrames } from "./record";
 import type { RecordSources } from "./record";
 import { markFirst } from "./record-marks";
@@ -151,7 +151,7 @@ import { Catalogue, discover, searchPath } from "./discovery";
 import { readDefinitions } from "./authoring";
 import { SharedDefinition } from "./definitions-model";
 import { DefinitionRefused, sharedDefinitions, takeDefinitions } from "./shared-definitions";
-import { sideJobs } from "./side-jobs";
+import { askingOf, sideJobs } from "./side-jobs";
 import { healParks, recoverParks } from "./park-recovery";
 import { Notifier } from "./notify";
 import { machineMemory } from "./memory";
@@ -197,11 +197,12 @@ import { Herdr, isSettled } from "./herdr";
 import type { AgentInfo } from "./herdr";
 import { taskOffers } from "./offers";
 import type { Offer } from "./offers";
-import { buildBoard, LANDED_STATES, ownedMrs, taskFlowOf } from "./board";
+import { buildBoard, ownedMrs, taskFlowOf } from "./board";
 import type { KeptCard, KeptCards } from "./board";
-import { mrOf, readForge, readMrStates, watchedMr } from "./merges";
+import { mrOf, readForge, watchedMr } from "./merges";
 import type { MrPanels } from "./merges";
 import { mrIdIn, projectHere, shell } from "./mr";
+import { takeUp } from "./take-up";
 import { ForgeHttp, forgeHttpLayer } from "./forge/http";
 import { fetchRef, followDetail } from "./run-detail";
 import { buildMachineOwn, buildRunDetail } from "./views";
@@ -1411,6 +1412,7 @@ const hostBoard = (dir: string) =>
     const model = Option.getOrUndefined(yield* Effect.serviceOption(RunModel));
     const registry = yield* Registry;
     const store = yield* Store;
+    const runRecords = yield* RunRecords;
     const checks = yield* CheckProcesses;
     const bun = yield* Effect.context<PlatformServices | Records>();
     const hosted = yield* Effect.context<HostServices>();
@@ -1551,6 +1553,10 @@ const hostBoard = (dir: string) =>
               Effect.tap((offers) => Effect.sync(() => offered.set(runId, offers))),
             ),
           cards,
+          watching: Effect.map(
+            store.outstanding,
+            (rows) => new Set(Arr.map(rows, (row) => row.run)),
+          ),
         }).pipe((built) => (refused ? refusingOutside(built) : built));
       }).pipe(
         (built) =>
@@ -1724,6 +1730,14 @@ const hostBoard = (dir: string) =>
       runs,
       views: (herds) => Effect.map(listingOf(agentsIn(herds)), (built) => built.views),
     });
+    // WARNING: asked again before each write, since a control can land while an earlier row is written.
+    const stillWatching = (run: string, name: string) =>
+      Effect.gen(function* () {
+        if (!(yield* store.waitingOn(run, name))) {
+          return false;
+        }
+        return !(yield* controlSet(run, HOLD, STOP));
+      }).pipe(Effect.provideService(RunRecords, runRecords));
     const stop = (runId: string, reason: string) =>
       once(
         runDir(env.stateDir, runId),
@@ -1763,14 +1777,15 @@ const hostBoard = (dir: string) =>
       record: registry.mergeRequest,
       stop,
       watches: {
-        list: store.watches,
+        still: stillWatching,
         observe: store.observe,
-        unavailable: (run: string, why: string) =>
-          Effect.flatMap(Host, (host) => host.parked(run, why, "forge-unavailable")).pipe(
-            Effect.provideContext(hosted),
-          ),
+        unavailable: (run: string, name: string, why: string) =>
+          Effect.flatMap(Host, (host) =>
+            host.parked(run, why, "forge-unavailable", stillWatching(run, name)),
+          ).pipe(Effect.provideContext(hosted)),
         wake: (run: string, name: string, woke: Woke) =>
           registry.wake(run, name, woke).pipe(Effect.provideContext(hosted)),
+        outstanding: store.outstanding,
       },
       requested: requestedOver(
         (suffix) => Effect.map(store.requestedEnding(suffix), (row) => row !== null),
@@ -1815,7 +1830,7 @@ export const boardTableWrites = Stream.unwrap(
   ),
 );
 
-const sharedBoardLayer = (dir: string) =>
+export const sharedBoardLayer = (dir: string) =>
   Layer.effect(SharedBoard)(
     Effect.gen(function* () {
       const store = yield* Store;
@@ -2039,6 +2054,7 @@ const sideJobsLayer = (panels: MrPanels) =>
         requested,
         nudged,
         recover,
+        runs,
       } = yield* SharedBoard;
       const board = Stream.runHead(boards).pipe(
         Effect.flatMap((latest) =>
@@ -2056,6 +2072,7 @@ const sideJobsLayer = (panels: MrPanels) =>
           stop,
           watches,
           requested,
+          asking: Effect.map(runs, askingOf),
           sweepers,
           nudged,
           recover,
@@ -2140,7 +2157,7 @@ const finishTakenOver = (stateDir: string) =>
     return followed;
   });
 
-const frontDoorHandlers = (
+export const frontDoorHandlers = (
   dir: string,
   installation: string,
   development: Development,
@@ -2640,33 +2657,8 @@ const frontDoorHandlers = (
           }
           return yield* act(file, lines);
         }).pipe(plainly);
-      // WARNING: A Run stopped after its merge request landed stays stopped.
-      const takeUp = Effect.fn("Host.takeUp")(function* (
-        runId: string,
-        recoveryPark?: string,
-        healing?: string,
-      ) {
-        const view = yield* registry.view(runId);
-        const run = view === null ? null : factsOfView(env.stateDir, view);
-        const mr = run?.state === "stopped" ? mrOf(run) : null;
-        const state =
-          mr === null
-            ? undefined
-            : (yield* readMrStates(env.stateDir).pipe(Effect.orElseSucceed(() => new Map()))).get(
-                (yield* mrIdIn(mr, run!.cwd, shell)) ?? "",
-              );
-        if (state === undefined || !LANDED_STATES.has(state)) {
-          return yield* registry.resume(runId, recoveryPark, healing);
-        }
-        return {
-          runId,
-          control: STOP,
-          set: false,
-          left: [],
-          applied: false,
-          detail: `${runId} was stopped after its merge request merged; there is nothing left to resume`,
-        };
-      });
+      const takeUpRun = (runId: string, recoveryPark?: string, healing?: string) =>
+        takeUp({ registry, stateDir: env.stateDir }, runId, recoveryPark, healing);
       const progressFor = (runId: string) =>
         Effect.gen(function* () {
           const view = yield* registry.view(runId);
@@ -2755,7 +2747,7 @@ const frontDoorHandlers = (
                     detail: "Recovery waits for memory or its setting",
                   };
                 }
-                return yield* takeUp(view.runId, park);
+                return yield* takeUpRun(view.runId, park);
               }).pipe(Effect.mapError((cause) => new HostRefused({ reason: reason(cause) }))),
             ),
         }).pipe(Effect.provideContext(hosted)),
@@ -3046,7 +3038,9 @@ const frontDoorHandlers = (
             "resume",
             request,
             whoOf(client),
-          )(Effect.flatMap(parkHealedBy(client), (healing) => takeUp(runId, undefined, healing))),
+          )(
+            Effect.flatMap(parkHealedBy(client), (healing) => takeUpRun(runId, undefined, healing)),
+          ),
         offers: ({ runId }) => serve(offersOn(runId)),
         workflows: ({ project }) =>
           onSyncedRevisions(

@@ -327,6 +327,8 @@ import { WorktreeRecordSchema } from "./run";
 import type { WorktreeRecord } from "./run";
 import { isOpen, listTasks, newTask, readTask, taskOfWorkspace, writeTask } from "./task";
 import { nowIso, epochMs, isoAt } from "./time";
+import { recordWatchEvent } from "./watch-journal";
+import type { WatchEvent } from "./watch-journal";
 import {
   pauseBefore,
   reachPause,
@@ -848,6 +850,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly ok: boolean;
     readonly message: string;
     readonly signature?: string;
+    readonly superseded?: string;
   }
 
   /** A pipeline job's state; \`missing\` is a pipeline without it. */
@@ -1033,7 +1036,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** Records what an implementer says it has done with a ticket, carded while it works. */
     readonly checkpoint: (runId: string, checkpoint: { readonly ticket: string; readonly status: "started" | "done"; readonly claims: ReadonlyArray<string> }) => Effect.Effect<void>;
     /** Why this Run parked its own work, shown beside its status; null clears it. No cause is \`unknown\`. */
-    readonly parked: (runId: string, why: string | null, cause?: ParkCause) => Effect.Effect<void>;
+    readonly parked: (
+      runId: string,
+      why: string | null,
+      cause?: ParkCause,
+      eligible?: Effect.Effect<boolean>,
+    ) => Effect.Effect<void>;
     readonly asking: (runId: string, question: DecisionSpec, asker?: string) => Effect.Effect<void>;
     /** Every question this run has been asked, oldest first, with its answer once it has one. */
     readonly asked: (
@@ -1281,6 +1289,28 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly approved?: string;
       /** A question shares the wake, so the card waits on whoever answers that. */
       readonly asking?: boolean;
+    }) => Effect.Effect<void, WorkflowError>;
+    /**
+     * Records that this Run's round \`name\` began its work at \`head\`, so the journal tells a round
+     * that started from one a moved head or a control refused.
+     */
+    readonly startedRound: (options: {
+      readonly runId: string;
+      readonly target: string;
+      readonly name: string;
+      readonly head: string;
+    }) => Effect.Effect<void, WorkflowError>;
+    /** Records that the round \`startedRound\` named finished its work; a Run that never got here left its round unfinished. */
+    readonly completedRound: (options: {
+      readonly runId: string;
+      readonly target: string;
+    }) => Effect.Effect<void, WorkflowError>;
+    /** Records that the round at \`head\` was abandoned before it reached the forge, \`moved\` being the head the forge shows now. */
+    readonly discardedRound: (options: {
+      readonly runId: string;
+      readonly target: string;
+      readonly cwd: string;
+      readonly head: string;
     }) => Effect.Effect<void, WorkflowError>;
     /** The merge request \`target\` as the forge reads it now: what a watch's cursor starts from. Take it inside an Activity. */
     readonly mrReading: (options: {
@@ -3556,6 +3586,10 @@ export const AWAITING = "awaiting";
 export const USAGE = "usage";
 const AWAITED = "awaited";
 const NOTIFIED = "notified";
+// WARNING: the round the workflow said it began is kept here; a wake is only the offer, so it is never read back from the journal.
+const STARTED_ROUND = "started-round";
+const BeganRound = Schema.Struct({ name: Schema.String, head: Schema.String });
+const BeganRoundJson = Schema.fromJsonString(BeganRound);
 
 const decodeParkCause = Schema.decodeUnknownOption(ParkCause);
 const parkCauseOf: (text: string | null) => ParkCause = (text) =>
@@ -4117,6 +4151,13 @@ export const hostLayer: (options: {
         recordedMergeRequest(runId).pipe(Effect.provideService(RunRecords, runRecords));
       const under = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
         Effect.provideContext(effect, services);
+      const journalWatch = (event: WatchEvent) => under(recordWatchEvent(dir)(event));
+      const beganRoundOf = (runId: string) =>
+        Effect.flatMap(runRecords.control(STARTED_ROUND, runId), (text) =>
+          text === null
+            ? Effect.succeed(null)
+            : Schema.decodeEffect(BeganRoundJson)(text).pipe(Effect.orElseSucceed(() => null)),
+        );
       const parkReview = (reason: string) =>
         Effect.gen(function* () {
           const run = yield* Effect.serviceOption(Run);
@@ -4125,6 +4166,22 @@ export const hostLayer: (options: {
             yield* host.parked(run.value.id, reason, "forge-unavailable");
             return yield* Workflow.suspend(instance.value);
           }
+        });
+      const completedRoundAt = (runId: string, mr: string) =>
+        Effect.gen(function* () {
+          const began = yield* beganRoundOf(runId);
+          if (began === null) {
+            return;
+          }
+          yield* journalWatch({
+            _tag: "completed",
+            at: yield* nowIso,
+            mr,
+            run: runId,
+            name: began.name,
+            head: began.head,
+          });
+          yield* runRecords.setControl(STARTED_ROUND, runId, null);
         });
       const reviewForge = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
         Effect.gen(function* () {
@@ -4138,6 +4195,7 @@ export const hostLayer: (options: {
             effect.pipe(
               Effect.updateService(ForgeHttp, (http) =>
                 ForgeHttp.of({
+                  attempts: http.attempts,
                   ask: (login, cwd, call) =>
                     http
                       .ask(login, cwd, call)
@@ -5376,9 +5434,16 @@ export const hostLayer: (options: {
             Effect.provideService(RunRecords, runRecords),
             Effect.orDie,
           ),
-        parked: (runId, why, cause = "unknown") => {
+        parked: (runId, why, cause = "unknown", eligible) => {
           const put = (control: string, text: string | null) =>
             runRecords.setControl(control, runId, text);
+          // WARNING: a control or the Watch itself can go while the evidence is read, which leaves no park to commit.
+          const ours = () =>
+            cause !== "forge-unavailable"
+              ? Effect.succeed(true)
+              : Effect.all([anySet(runId, HOLD, STOP), eligible ?? Effect.succeed(true)]).pipe(
+                  Effect.map(([controlled, watching]) => !controlled && watching),
+                );
           return (
             why === null
               ? put(PARKED, null)
@@ -5392,20 +5457,32 @@ export const hostLayer: (options: {
                     !Str.startsWith(`${cause}-`)(info.id)
                       ? [info.id]
                       : [];
-                  if (Option.isNone(before) || causeBefore !== cause || info === null) {
-                    const tree = yield* treeOf(yield* store.run(runId), runId, dir);
-                    const id = parkIdentity(
-                      runId,
-                      cause,
-                      yield* under(parkEvidence(dir, runId, tree.cwd, cause, why)).pipe(
-                        Effect.provideContext(bun),
-                      ),
-                    );
-                    info = { ...parkOf(cause), id, since: yield* nowIso };
+                  const read =
+                    Option.isNone(before) || causeBefore !== cause || info === null
+                      ? yield* Effect.gen(function* () {
+                          const tree = yield* treeOf(yield* store.run(runId), runId, dir);
+                          const id = parkIdentity(
+                            runId,
+                            cause,
+                            yield* under(parkEvidence(dir, runId, tree.cwd, cause, why)).pipe(
+                              Effect.provideContext(bun),
+                            ),
+                          );
+                          return { ...parkOf(cause), id, since: yield* nowIso };
+                        })
+                      : null;
+                  if (read !== null && !(yield* ours())) {
+                    return;
+                  }
+                  if (read !== null) {
+                    info = read;
                     yield* put(
                       PARK_INFO,
                       yield* Schema.encodeEffect(ParkJson)(info).pipe(Effect.orDie),
                     );
+                  }
+                  if (info === null || !(yield* ours())) {
+                    return;
                   }
                   if (Option.getOrNull(before) === why && causeBefore === cause) {
                     yield* put(PARK_CAUSE, cause);
@@ -5424,6 +5501,9 @@ export const hostLayer: (options: {
                     // WARNING: a park its Heal caused again is that Heal's to settle.
                     !(healing._tag === "Some" && healing.value.cause === cause);
                   const passed = claims ? yield* passedOverHere(runId, cause, recoveries) : null;
+                  if (!(yield* ours())) {
+                    return;
+                  }
                   yield* put(PARK_CAUSE, cause);
                   yield* put(PARKED, why);
                   yield* under(
@@ -6215,6 +6295,59 @@ export const hostLayer: (options: {
               who: THE_AUTHOR,
             });
           }),
+        startedRound: (asked) =>
+          Effect.gen(function* () {
+            const mr = mrId(asked.target);
+            if (mr === null) {
+              return yield* new WorkflowError({
+                reason: `${asked.target} names no merge request the merge watch can read`,
+              });
+            }
+            yield* journalWatch({
+              _tag: "started",
+              at: yield* nowIso,
+              mr,
+              run: asked.runId,
+              name: asked.name,
+              head: asked.head,
+            });
+            yield* runRecords.setControl(
+              STARTED_ROUND,
+              asked.runId,
+              yield* Schema.encodeEffect(BeganRoundJson)({
+                name: asked.name,
+                head: asked.head,
+              }).pipe(Effect.orDie),
+            );
+          }),
+        completedRound: (asked) =>
+          Effect.gen(function* () {
+            const mr = mrId(asked.target);
+            // WARNING: a branch or worktree review starts no watched round, so its save has nothing to complete.
+            if (mr === null) {
+              return;
+            }
+            yield* completedRoundAt(asked.runId, mr);
+          }),
+        discardedRound: (asked) =>
+          Effect.gen(function* () {
+            const mr = mrId(asked.target);
+            const ref = mrRefOf(asked.target);
+            if (mr === null || ref === null) {
+              return yield* new WorkflowError({
+                reason: `${asked.target} names no merge request the merge watch can read`,
+              });
+            }
+            const read = yield* under(forgeOf(ref).details(ref, asked.cwd, runShell));
+            yield* journalWatch({
+              _tag: "discarded",
+              at: yield* nowIso,
+              mr,
+              run: asked.runId,
+              head: asked.head,
+              moved: read._tag === "Details" ? (read.head ?? "") : "",
+            });
+          }),
         mrReading: (asked) =>
           Effect.gen(function* () {
             const ref = mrRefOf(asked.target);
@@ -6300,6 +6433,17 @@ export const hostLayer: (options: {
               return { refused: pinned.refused };
             }
             if (pinned.moved !== undefined) {
+              const mr = mrId(asked.target);
+              if (mr !== null) {
+                yield* journalWatch({
+                  _tag: "discarded",
+                  at: yield* nowIso,
+                  mr,
+                  run: asked.runId,
+                  head: asked.head,
+                  moved: pinned.moved,
+                });
+              }
               return { moved: pinned.moved };
             }
             const launch = yield* decodeStrings(row.options ?? "{}").pipe(
@@ -6622,7 +6766,7 @@ export const hostLayer: (options: {
                     if (refused !== null) {
                       return { ok: false, message: refused };
                     }
-                    return yield* postNote(
+                    const posted = yield* postNote(
                       {
                         target: asked.target,
                         cwd: asked.cwd,
@@ -6632,6 +6776,30 @@ export const hostLayer: (options: {
                       },
                       runShell,
                     );
+                    const mr = mrId(asked.target);
+                    if (mr !== null) {
+                      const at = yield* nowIso;
+                      if (posted.ok) {
+                        yield* journalWatch({
+                          _tag: "published",
+                          at,
+                          mr,
+                          run: asked.runId,
+                          head: asked.head,
+                          round: asked.round,
+                        });
+                      } else if (posted.superseded !== undefined) {
+                        yield* journalWatch({
+                          _tag: "discarded",
+                          at,
+                          mr,
+                          run: asked.runId,
+                          head: asked.head,
+                          moved: posted.superseded,
+                        });
+                      }
+                    }
+                    return posted;
                   }),
                 ),
               ),
@@ -7909,7 +8077,7 @@ export interface RegistryApi {
     run: string,
     name: string,
     woke: Woke,
-  ) => Effect.Effect<void, never, HostServices>;
+  ) => Effect.Effect<boolean, never, HostServices>;
   readonly supersede: (options: {
     readonly runId: string;
     readonly decision: string;
@@ -10087,9 +10255,6 @@ const makeRegistry: (
     reason?: string,
   ) {
     const { runs } = yield* applyControl(runId, STOP, true, undefined, alone);
-    for (const one of runs) {
-      yield* forgetWatch(one);
-    }
     const agents = yield* Agents;
     const left: Array<string> = [];
     for (const one of runs) {
@@ -11172,9 +11337,16 @@ const makeRegistry: (
     }, waking.withPermits(1)),
 
     wake: Effect.fn("Engine.Registry.wake")(function* (run: string, name: string, woke: Woke) {
+      // WARNING: a row kept by a Stop, or a round's own watch, is a wake nothing is waiting on.
+      if (!(yield* store.waitingOn(run, name))) {
+        return false;
+      }
+      if (Arr.some(yield* controlsOf(run), (control) => control === HOLD || control === STOP)) {
+        return false;
+      }
       yield* store.wake(run, name, woke);
       if (wakingWatches.has(run)) {
-        return;
+        return false;
       }
       if (Arr.some(yield* store.asked(run), (row) => row.decision === name)) {
         const closed = yield* store.settle({
@@ -11184,12 +11356,13 @@ const makeRegistry: (
           request: `${run}-${name}-woke`,
         });
         if (closed._tag === "refused") {
-          return yield* forgetWatch(run, name);
+          yield* forgetWatch(run, name);
+          return false;
         }
       }
       const found = yield* routed(run).pipe(Effect.option);
       if (Option.isNone(found)) {
-        return;
+        return false;
       }
       wakingWatches.add(run);
       const { generation, execution } = found.value;
@@ -11203,6 +11376,7 @@ const makeRegistry: (
         Effect.ensuring(Effect.sync(() => wakingWatches.delete(run))),
         Effect.forkIn(hostScope),
       );
+      return true;
     }),
 
     supersede: supersedeQuestion,

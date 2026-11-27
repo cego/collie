@@ -609,16 +609,16 @@ it ends; one that still owes a merge request stays on the board however old it i
 became of it, every minute for one on a card and every 5 minutes for the rest, and at once
 after a Run publishes it, and records `merged` as that forge's word when it merged. What it
 reads is the only forge answer a card or a listing's offers see; taking an offer asks again
-(ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs). It asks
-about every merge request a Task owes, whatever its section, age or the Dispositions of
-its Runs, follows a merged one to production, and keeps asking about a closed one in case
-it is reopened. Only a merge request settled by `abandoned` is not asked about. Each answer
-it keeps carries the time it was read and the head it was read at, across a host restart,
-and an answer of open read after a recorded `merged` outranks it: the merge request is owed
-again, and no record is rewritten. An answer with no read time, as an earlier host wrote
-them, counts as never asked until the next round asks it. A forge that cannot be read
-leaves every stored answer and its read time as it was, so it settles nothing and
-unsettles nothing. A card says when the forge last answered once that is more than two
+(ADR-draft-the-board-is-a-projection-of-facts-the-host-syncs). It asks about every merge
+request a Task owes, whatever its section, age or the Dispositions of its Runs, follows a
+merged one to production, and keeps asking about a closed one in case it is reopened. Only a
+merge request settled by `abandoned` is not asked about, unless a Run's own Watch is still
+watching it. Each answer it keeps carries the time it was read and the head it was read at,
+across a host restart, and an answer of open read after a recorded `merged` outranks it: the
+merge request is owed again, and no record is rewritten. An answer with no read time, as an
+earlier host wrote them, counts as never asked until the next round asks it. A forge that
+cannot be read leaves every stored answer and its read time as it was, so it settles nothing
+and unsettles nothing. A card says when the forge last answered once that is more than two
 rounds old, and says when its last ask failed.
 
 **Unseen** — A **Finished** Task's leading Run that ended by itself with something to

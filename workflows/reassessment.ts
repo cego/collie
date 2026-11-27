@@ -103,6 +103,12 @@ export const reassess = (ask: {
       .writeFileString(`${dir}/review-head`, ask.head)
       .pipe(Effect.orDie);
     yield* Activity.make({
+      name: `reassess-completed-${ask.at}`,
+      success: Schema.Void,
+      error: WorkflowError,
+      execute: host.completedRound({ runId: run.id, target: ask.target }),
+    });
+    yield* Activity.make({
       name: `reassess-head-${ask.at}`,
       success: Schema.Void,
       error: WorkflowError,

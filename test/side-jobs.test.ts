@@ -53,9 +53,10 @@ const NO_REQUESTS: Requested = {
 };
 
 const NO_WATCHES = {
-  list: () => Effect.succeed([]),
+  outstanding: Effect.succeed([]),
+  still: () => Effect.succeed(true),
   observe: () => Effect.void,
-  wake: () => Effect.void,
+  wake: () => Effect.succeed(true),
   unavailable: () => Effect.void,
 };
 
@@ -252,6 +253,7 @@ test("News and the merge watch read the host's latest board, and list no Runs of
         stop: () => Effect.void,
         watches: NO_WATCHES,
         requested: NO_REQUESTS,
+        asking: Effect.succeed(new Set<string>()),
         sweepers: Effect.succeed([]),
       }).pipe(Effect.timeout("12 seconds"), Effect.ignore, fastForward);
       expect(reads).toBeGreaterThanOrEqual(5);
