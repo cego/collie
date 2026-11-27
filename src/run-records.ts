@@ -160,6 +160,7 @@ export const BOOKKEEPING: ReadonlySet<string> = new Set([
   "operations.jsonl",
   "steering/disposition.jsonl",
   "steering/seen.jsonl",
+  "open-findings",
 ]);
 
 const STEP_SAMPLES = 10;
