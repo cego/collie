@@ -1190,7 +1190,7 @@ const claudeReconcile = Effect.fn("Compactors.claudeReconcile")(function* (
     // WARNING: the turn that typed the marker is the only turn whose compaction is the request's.
     if (entry.type === "user") {
       const request = namedRequest(entry);
-      if (request !== null) {
+      if (compactCommand(entry)) {
         commands.push({ at, request });
       }
       named = request === mark.id;
@@ -1362,6 +1362,21 @@ const namedRequest = (entry: {
   const args = tagged === null ? CLAUDE_COMMAND.exec(said)?.[1] : COMMAND_ARGS.exec(said)?.[1];
   const named = tagged === null || Str.trim(tagged[1] ?? "") === "/compact";
   return named && args !== undefined ? identifier(COMPACT_ARGS.exec(Str.trim(args))?.[1]) : null;
+};
+
+// WARNING: an ordinary /compact names no request but is still a command, so it opens a boundary like any other.
+const compactCommand = (entry: {
+  readonly message?: { readonly content?: unknown };
+  readonly type?: string;
+}) => {
+  const said = Str.trim(Option.getOrElse(asText(entry.message?.content), () => ""));
+  if (entry.type === "message") {
+    return PI_COMMAND.test(said);
+  }
+  const tagged = COMMAND_NAME.exec(said);
+  return tagged === null
+    ? /^\/compact(\s[\s\S]*)?$/.test(said)
+    : Str.trim(tagged[1] ?? "") === "/compact";
 };
 
 const boundary = (line: { readonly type?: string; readonly subtype?: string }) =>
