@@ -102,7 +102,6 @@ pub enum Words {
     FollowUp,
 }
 
-/// A Workflow a Machine has, and the Inputs it asks for besides the checkout.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Startable {
     pub id: String,
@@ -158,7 +157,6 @@ pub enum Dialog {
         workflows: Option<Vec<Startable>>,
         chosen: Option<String>,
         checkout: TextEdit,
-        /// What the chosen Workflow asks for besides the checkout, in its own order.
         inputs: Vec<(String, TextEdit)>,
         why: Option<String>,
     },
@@ -802,7 +800,6 @@ impl App {
                 else {
                     return;
                 };
-                // WARNING: an answer read for another Task's Machine is another Machine's Workflows.
                 if *card != asked {
                     return;
                 }
