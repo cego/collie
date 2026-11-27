@@ -1284,11 +1284,19 @@ const exitOfLaunch = (dir: string, launch: string | null) =>
     if (launch === null) {
       return null;
     }
-    const stops = Arr.filter(
-      yield* readEvents(dir).pipe(Effect.orElseSucceed(() => [])),
-      (one) => one.kind === "stopped",
+    const events = yield* readEvents(dir).pipe(Effect.orElseSucceed(() => []));
+    const stops = Arr.filter(events, (one) => one.kind === "stopped");
+    // WARNING: a harness that names no launch still cannot have refused before this launch started.
+    const began = Option.getOrElse(
+      Arr.findLast(events, (one) => one.kind === "launch" && one.launch === launch),
+      () => ({ at: Number.POSITIVE_INFINITY }),
+    ).at;
+    const mine = Option.getOrUndefined(
+      Arr.findLast(
+        stops,
+        (one) => one.launch === launch || ((one.launch ?? null) === null && one.at > began),
+      ),
     );
-    const mine = Option.getOrUndefined(Arr.findLast(stops, (one) => one.launch === launch));
     return mine === undefined ? null : (mine.reason ?? "its turn ended on an error");
   });
 

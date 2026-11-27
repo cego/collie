@@ -22,6 +22,7 @@ import {
   ranOutSince,
   recordClaudeEvent,
   recordEvent,
+  writeEvent,
   stoppedSince,
   submittedDelivery,
   turnTaken,
@@ -59,6 +60,20 @@ const ctx = () => ({
   dir,
   endpoint: null,
   channel: fakeChannel(prompted),
+});
+
+const encodeStop = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
+const stopFailure = (error: string, details?: string) =>
+  encodeStop({
+    session_id: "s-1",
+    hook_event_name: "StopFailure",
+    error,
+    ...(details !== undefined && { error_details: details }),
+    transcript_path: "/home/mk/.claude/projects/p/s-1.jsonl",
+  });
+
+const SettingsFile = Schema.Struct({
+  hooks: Schema.Struct({ StopFailure: Schema.optionalKey(Schema.Array(Schema.Unknown)) }),
 });
 
 const StatusLine = Schema.Struct({
@@ -620,16 +635,6 @@ test("rate_limits Collie cannot read leave the context line alone", () =>
     }),
   ));
 
-const encodeStop = flow(Schema.encodeResult(Schema.fromJsonString(Schema.Json)), Result.getOrThrow);
-const stopFailure = (error: string, details?: string) =>
-  encodeStop({
-    session_id: "s-1",
-    hook_event_name: "StopFailure",
-    error,
-    ...(details !== undefined && { error_details: details }),
-    transcript_path: "/home/mk/.claude/projects/p/s-1.jsonl",
-  });
-
 test("Collie's own install record is not proof that Claude came up", () =>
   withLaunch(
     Effect.gen(function* () {
@@ -647,6 +652,50 @@ test("Collie's own install record is not proof that Claude came up", () =>
       expect(yield* ready(at)).toBe(false);
       yield* recordClaudeEvent(dir, measured("s-1", 15_500, 1200, 8));
       expect(yield* ready(at)).toBe(true);
+    }),
+  ));
+
+test("a stand-in Claude that exits with no conversation is read as that launch's refusal", () =>
+  withLaunch(
+    Effect.gen(function* () {
+      const bin = path.join(rig.root, "bin");
+      yield* fs.makeDirectory(bin, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(bin, "claude"),
+        `#!/bin/sh\n[ "$1" = --version ] && echo "2.10.0 (Claude Code)" && exit 0\nexit 1\n`,
+      );
+      yield* fs.chmod(path.join(bin, "claude"), 0o755);
+      const before = Bun.env.PATH;
+      Bun.env.PATH = `${bin}:${before}`;
+      const at = {
+        agent: "build-r1",
+        harness: "claude",
+        cwd: rig.projectDir,
+        dir,
+        endpoint: null,
+        env: ["COLLIE_LAUNCH=l-1"],
+        session: "s-1",
+      };
+      yield* (claude.install ?? (() => Effect.void))(at);
+      Bun.env.PATH = before;
+      const settings = parseJson(SettingsFile, yield* fs.readFileString(`${dir}/settings.json`));
+      expect(settings.hooks.StopFailure).toBeDefined();
+      const refused = yield* Effect.sync(() =>
+        Bun.spawnSync({
+          cmd: [process.execPath, `${import.meta.dir}/../src/main.ts`, "herdr", "compaction", dir],
+          cwd: rig.root,
+          stdin: Buffer.from(
+            stopFailure("authentication_failed", "No conversation found with session ID: s-1"),
+          ),
+          env: { ...Bun.env, COLLIE_LAUNCH: "l-1" },
+          stdout: "pipe",
+          stderr: "pipe",
+        }),
+      );
+      expect(refused.exitCode).toBe(0);
+      const exitOf = claude.exitOf ?? (() => Effect.succeed(null));
+      expect(yield* exitOf(at, "l-1")).toBe("No conversation found with session ID: s-1");
+      expect(yield* exitOf(at, "l-2")).toBeNull();
     }),
   ));
 
@@ -681,6 +730,24 @@ test("a stop another launch left is not this launch's refusal", () =>
       });
       expect(yield* exitOf(ctx("l-2"), "l-2")).toBeNull();
       expect(yield* exitOf(ctx("l-1"), "l-1")).toBe("OAuth token has expired. Please run /login.");
+    }),
+  ));
+
+test("a stop with no launch is not a refusal for a launch that had not started", () =>
+  withLaunch(
+    Effect.gen(function* () {
+      yield* writeEvent(dir, { session: "s-1", kind: "stopped", reason: "No conversation found" });
+      yield* recordEvent(dir, { session: "s-1", launch: "l-2", kind: "launch" });
+      const exitOf = COMPACTION_PORTS.claude!.exitOf!;
+      const at = {
+        agent: "build-r1",
+        harness: "claude",
+        cwd: rig.projectDir,
+        dir,
+        endpoint: null,
+        env: [],
+      };
+      expect(yield* exitOf(at, "l-2")).toBeNull();
     }),
   ));
 
