@@ -985,7 +985,7 @@ test("An import naming a variable the shell cannot do without is left out rather
 
 test("An import whose variable the shell's allowlist names is left out, and the allowlist kept", () => {
   const fixture = serveDocs({ tool: "read_doc" });
-  Bun.env.DOC_VAR = "kept";
+  Bun.env.DOC_VAR = "synthetic-relay-value";
   return withServers(
     { docs: { type: "http", url: fixture.url, headers: { Authorization: "Bearer ${DOC_VAR}" } } },
     (driver, context) =>
@@ -1059,10 +1059,12 @@ test("An allowlist naming Collie's own token keeps its include, and the token ta
       expect(given).toContain('"collie_chat_mcp_token" = "include"');
       expect(given).not.toContain('"COLLIE_CHAT_MCP_TOKEN" = "exclude"');
       expect(given).toContain('bearer_token_env_var="COLLIE_CHAT_MCP_TOKEN_2"');
-      expect(Rec.keys(details.env)).toContain("COLLIE_CHAT_MCP_TOKEN_2");
+      expect(details.env.COLLIE_CHAT_MCP_TOKEN_2).toBeString();
       yield* session.offer("shell");
       const shell = message(yield* turn(session));
       expect(shell).not.toContain("COLLIE_CHAT_MCP_TOKEN=");
+      expect(shell).not.toContain("COLLIE_CHAT_MCP_TOKEN_2=");
+      expect(shell).not.toContain(details.env.COLLIE_CHAT_MCP_TOKEN_2);
       expect(shell).not.toContain("HOME=");
     }),
   ).finally(() => void fixture.stop());
@@ -1088,9 +1090,12 @@ test("An allowlist naming Collie's relay token keeps its include, and the relay 
         expect(given).toContain('"COLLIE_CHAT_RELAY_1" = "include"');
         expect(given).not.toContain('"COLLIE_CHAT_RELAY_1" = "exclude"');
         expect(given).toContain("COLLIE_CHAT_RELAY_1_2");
+        expect(details.env.COLLIE_CHAT_RELAY_1_2).toBeString();
         yield* session.offer("shell");
         const shell = message(yield* turn(session));
         expect(shell).not.toContain("COLLIE_CHAT_RELAY_1=");
+        expect(shell).not.toContain("COLLIE_CHAT_RELAY_1_2=");
+        expect(shell).not.toContain("synthetic-relay-value");
         expect(shell).not.toContain("HOME=");
       }),
   ).finally(() => {
