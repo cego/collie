@@ -1,12 +1,47 @@
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { Effect } from "effect";
 import type { Mutable } from "effect/Types";
 import type { ActionSchema } from "../actions";
 import { Command, Flag } from "effect/cli";
 import { listRuns } from "../runs";
 import { actAsked, hostTasks } from "../lifecycle";
+import type { PluginEnv } from "../env";
+import { hostInstallation } from "../project";
+import type { Filing } from "../task";
 import { err } from "../operations";
 import { answering, cliDoor, mutating, requestIdFlag } from "./shared";
+
+const whyNot = (filed: Filing) => {
+  switch (filed.result) {
+    case "stale":
+      return `; it is in ${filed.membership.project?.id ?? "no Project"} (membership ${filed.membership.seq}), so read the board and file it again`;
+    case "archived":
+      return "; its Project is archived, so restore it before filing into it";
+    case "missing":
+      return "; no such Task or Project is here";
+    case "unavailable":
+      return "; the Machine that owns the Project could not be reached, so nothing changed and the same filing can be tried again";
+    default:
+      return "";
+  }
+};
+
+// WARNING: a bare id is this Machine's own Project, and `<installation>:<id>` is another Machine's.
+const projectRef = (env: PluginEnv, written: string) => {
+  const at = Str.indexOf(":")(written);
+  if (Option.isSome(at) && at.value > 0) {
+    return Effect.succeed({
+      installation: Str.slice(0, at.value)(written),
+      id: Str.slice(at.value + 1)(written),
+    });
+  }
+  return Effect.map(hostInstallation(env.stateDir), (here) => ({
+    installation: here ?? "",
+    id: written,
+  }));
+};
 
 const list = Command.make("list", {}, () =>
   answering((env) =>
@@ -100,7 +135,9 @@ const file = Command.make(
   {
     task: Flag.String("task").pipe(Flag.withDescription("The Task's id, as `task list` prints it")),
     project: Flag.String("project").pipe(
-      Flag.withDescription("The Project on this Machine to file it in"),
+      Flag.withDescription(
+        "The Project to file it in: its id on this Machine, or `<installation>:<id>` for a Project another Machine owns",
+      ),
       Flag.optional,
     ),
     expected: Flag.Int("expected").pipe(
@@ -126,7 +163,7 @@ const file = Command.make(
             Extract<typeof ActionSchema.Encoded, { kind: "task_file" }>["filings"][number]
           > = { task };
           if (project._tag === "Some") {
-            filing.project = project.value;
+            filing.project = yield* projectRef(env, project.value);
           }
           if (expected._tag === "Some") {
             filing.expected = expected.value;
@@ -143,7 +180,7 @@ const file = Command.make(
           const landed = filed.result === "filed" || filed.result === "already";
           const human = landed
             ? `${task}: ${filed.result}${filed.membership.project === null ? " unassigned" : ` in ${filed.membership.project.id}`} (membership ${filed.membership.seq})`
-            : `${task}: ${filed.result}${filed.result === "stale" ? `; it is in ${filed.membership.project?.id ?? "no Project"} (membership ${filed.membership.seq}), so read the board and file it again` : ""}`;
+            : `${task}: ${filed.result}${whyNot(filed)}`;
           return landed
             ? {
                 ok: true as const,

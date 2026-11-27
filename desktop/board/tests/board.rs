@@ -2107,20 +2107,6 @@ fn select_for_filing(runtime: &mut Runtime<App>, card: &str) {
     press(runtime, &format!("{card}-menu"));
     choose(runtime, "Select for filing");
 }
-/// Each filing a TaskFile action carries: its Task and the Project it names.
-fn filed(asked: &Value) -> Vec<(String, Option<String>)> {
-    asked["action"]["filings"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|one| {
-            (
-                one["task"].as_str().unwrap_or_default().to_string(),
-                one["project"].as_str().map(String::from),
-            )
-        })
-        .collect()
-}
 /// Presses the `role` element of the accessibility tree that says `name`, where it rests.
 fn press_named(runtime: &mut Runtime<App>, role: &str, name: &str) {
     let tree = runtime.accessibility_json();
@@ -2180,11 +2166,11 @@ fn a_selection_of_unassigned_tasks_is_filed_into_a_project_once() {
     assert_eq!(sent[0]["installation"], "inst-pc");
     assert_eq!(sent[0]["action"]["_tag"], "TaskFile");
     assert_eq!(
-        filed(&sent[0]),
-        [
-            ("t-1".to_string(), Some("project-payments".to_string())),
-            ("t-2".to_string(), Some("project-payments".to_string())),
-        ]
+        sent[0]["action"]["filings"],
+        json!([
+            {"task": "t-1", "project": {"installation": "inst-pc", "id": "project-payments"}},
+            {"task": "t-2", "project": {"installation": "inst-pc", "id": "project-payments"}},
+        ])
     );
     assert!(
         node(&runtime, "filing").is_none(),
@@ -2223,14 +2209,14 @@ fn a_selection_across_machines_is_filed_by_owner_and_the_one_away_is_tried_again
     assert_eq!(sent.len(), 2, "one action per owner");
     assert_eq!(sent[0]["installation"], "inst-pc");
     assert_eq!(
-        filed(&sent[0]),
-        [("t-1".to_string(), Some("project-payments".to_string()))]
+        sent[0]["action"]["filings"],
+        json!([{"task": "t-1", "project": {"installation": "inst-pc", "id": "project-payments"}}])
     );
     assert_eq!(sent[1]["installation"], "inst-vm");
     assert_eq!(
-        filed(&sent[1]),
-        [("t-vm".to_string(), None)],
-        "a saved board names no Project, since it does not know its own"
+        sent[1]["action"]["filings"][0]["project"],
+        json!({"installation": "inst-pc", "id": "project-payments"}),
+        "one destination: the Task's owner files into the Machine that owns the Project"
     );
     assert_eq!(sent[1]["unsent"], "its board is a saved one, as of 14:05");
     // The Machine comes back, and only its entries are sent again.
@@ -2255,8 +2241,9 @@ fn a_selection_across_machines_is_filed_by_owner_and_the_one_away_is_tried_again
         sent[2]
     );
     assert_eq!(
-        filed(&sent[2]),
-        [("t-vm".to_string(), Some("project-payments".to_string()))]
+        sent[2]["action"]["filings"][0]["project"],
+        json!({"installation": "inst-pc", "id": "project-payments"}),
+        "the retry names the same destination"
     );
 }
 
@@ -2290,8 +2277,8 @@ fn moving_a_task_by_its_project_id_leaves_the_scope_it_was_in_and_comes_back_wit
     press(&mut runtime, "file-into-inst-pc-project-refunds");
     let sent = acts(&harness);
     assert_eq!(
-        filed(&sent[0]),
-        [("t-1".to_string(), Some("project-refunds".to_string()))]
+        sent[0]["action"]["filings"],
+        json!([{"task": "t-1", "project": {"installation": "inst-pc", "id": "project-refunds"}}])
     );
     // What the host answers with: the same Task, its Runs and its question, in the next Project.
     let mut moved = in_payments(work(), false);

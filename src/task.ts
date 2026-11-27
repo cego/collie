@@ -130,7 +130,7 @@ export interface Membership {
 }
 export const FilingSchema = Schema.Struct({
   task: Schema.String,
-  result: Schema.Literals(["filed", "already", "stale", "archived", "missing"]),
+  result: Schema.Literals(["filed", "already", "stale", "archived", "missing", "unavailable"]),
   // WARNING: what the entry left behind, or what it found instead when it was stale.
   membership: Schema.Struct({ project: Schema.NullOr(ProjectRefSchema), seq: Schema.Finite }),
 });

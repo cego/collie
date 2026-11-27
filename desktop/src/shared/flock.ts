@@ -32,6 +32,7 @@ import { MachineUsage } from "./usage";
 import { MachineCatalogue } from "./settings-agents";
 import { MachineConnections } from "./connections";
 import { SlackChannel } from "../../../src/slack";
+import { ProjectRef } from "../../../src/project";
 import { keepOwn, OwnReading } from "./machine-own";
 import {
   BoardMessage,
@@ -291,7 +292,8 @@ export const DesktopAction = Schema.Union([
     filings: Schema.Array(
       Schema.Struct({
         task: Schema.String,
-        project: Schema.optionalKey(Schema.String),
+        // WARNING: the destination is qualified, because the Project it names may belong to another Machine.
+        project: Schema.optionalKey(ProjectRef),
         expected: Schema.optionalKey(Schema.Finite),
       }),
     ),

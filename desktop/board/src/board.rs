@@ -563,38 +563,21 @@ impl App {
         })
     }
 
-    /// The filings one Machine's share of a selection carries: the chosen Project where this
-    /// Machine owns it, or the Project of the same name where it keeps one, and none otherwise.
-    fn filings_of(&self, installation: &str, plan: &FilePlan) -> Value {
-        let project = plan
-            .target
-            .as_ref()
-            .and_then(|target| self.project_for(installation, target));
+    /// The filings one Machine's share of a selection carries: every entry names the same
+    /// destination, because a Project that belongs to another Machine is resolved at its owner.
+    fn filings_of(&self, plan: &FilePlan) -> Value {
         let filings: Vec<Value> = plan
             .tasks
             .iter()
-            .map(|task| match &project {
-                Some(project) => json!({ "task": task, "project": project }),
+            .map(|task| match &plan.target {
+                Some(target) => json!({
+                    "task": task,
+                    "project": { "installation": target.installation, "id": target.id },
+                }),
                 None => json!({ "task": task }),
             })
             .collect();
         json!({ "_tag": "TaskFile", "filings": filings })
-    }
-
-    fn project_for(&self, installation: &str, target: &Target) -> Option<String> {
-        if target.installation == installation {
-            return Some(target.id.clone());
-        }
-        self.machines
-            .iter()
-            .find(|shown| shown.machine.installation == installation)
-            .and_then(|shown| {
-                shown
-                    .projects
-                    .iter()
-                    .find(|project| !project.archived && project.name == target.name)
-            })
-            .map(|project| project.id.clone())
     }
 
     pub(crate) fn offset(&self) -> i32 {
@@ -610,7 +593,7 @@ impl App {
         // has come back rather than the board it had when it was first asked.
         again.unsent = self.unsent_of(&again.installation);
         if let Some(plan) = &again.plan {
-            again.action = self.filings_of(&again.installation, plan);
+            again.action = self.filings_of(plan);
         }
         self.tried(&again.tried, &again.request, None);
         let mut payload = json!({

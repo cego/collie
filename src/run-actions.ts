@@ -57,7 +57,9 @@ import {
   withProjectLock,
   writeProject,
 } from "./project";
-import type { ProjectRecord } from "./project";
+import type { ProjectRecord, ProjectRef } from "./project";
+import { machineName, peersOf } from "./peers";
+import { connectPeer } from "./host";
 import { clearOverride, collieOwnRefusal, err, workspaceNamed } from "./operations";
 import type { Failure, OpResult } from "./operations";
 import { Herdr } from "./herdr";
@@ -569,6 +571,37 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   projectChange("project_unstar");
   projectChange("project_archive");
   projectChange("project_restore");
+  // WARNING: a destination belongs to the Machine that made it, so its existence is asked there.
+  const projectAt = (env: PluginEnv, ref: ProjectRef) =>
+    Effect.gen(function* () {
+      const here = yield* hostInstallation(env.stateDir);
+      if (ref.installation === here) {
+        const project = yield* readProject(ref.id);
+        return project === null ? null : { installation: here, project };
+      }
+      const peer = Option.getOrUndefined(
+        Arr.findFirst(yield* peersOf(env.stateDir), (one) => one.installation === ref.installation),
+      );
+      if (peer === undefined) {
+        return "unavailable" as const;
+      }
+      return yield* Effect.scoped(
+        connectPeer(env.stateDir, peer.name, {
+          as: "host",
+          client: machineName(),
+          stamp: env.hostStamp,
+        }).pipe(
+          Effect.flatMap((client) => client.projects()),
+          Effect.map((projects) => {
+            const found = Arr.findFirst(projects, (one) => one.id === ref.id);
+            return Option.isNone(found)
+              ? null
+              : { installation: ref.installation, project: found.value };
+          }),
+          Effect.orElseSucceed(() => "unavailable" as const),
+        ),
+      );
+    });
   registerExecutor("task_file", (action, _by, env) =>
     Effect.gen(function* () {
       if (action.filings.length === 0) {
@@ -586,25 +619,30 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           filed.push(missing);
           continue;
         }
-        const project = entry.project === undefined ? null : yield* readProject(entry.project);
-        if (entry.project !== undefined && project === null) {
+        const where = entry.project === undefined ? null : yield* projectAt(env, entry.project);
+        if (where === "unavailable") {
+          filed.push({ ...missing, result: "unavailable" });
+          continue;
+        }
+        if (entry.project !== undefined && where === null) {
           filed.push(missing);
           continue;
         }
-        if (project !== null && isArchived(project)) {
+        if (where !== null && isArchived(where.project)) {
           filed.push({ ...missing, result: "archived" });
           continue;
         }
         filed.push(
           yield* fileTask({
             id: entry.task,
-            project: project === null ? null : { installation: installation ?? "", id: project.id },
+            project:
+              where === null ? null : { installation: where.installation, id: where.project.id },
             expected: entry.expected,
           }),
         );
       }
       const counts = Arr.map(
-        ["filed", "already", "stale", "archived", "missing"],
+        ["filed", "already", "stale", "archived", "missing", "unavailable"],
         (result) => [result, Arr.filter(filed, (one) => one.result === result).length] as const,
       );
       const said = Arr.join(

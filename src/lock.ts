@@ -207,6 +207,24 @@ export const releaseOwnLock = Effect.fn("releaseOwnLock")(function* (lock: strin
 // WARNING: A loser waits out the winner, then reads what it wrote, rather than failing as busy.
 export const READ_WRITE_LOCK_BUDGET = Duration.seconds(30);
 
+// WARNING: a claim that cannot be taken at all is a defect, so only `contended` says a lock was busy.
+export const holdLock = <A, E, R>(
+  lock: string,
+  contended: Effect.Effect<A, E>,
+  effect: Effect.Effect<A, E, R>,
+  claims: number | Duration.Duration = LOCK_CLAIM_RETRIES,
+) =>
+  Effect.acquireUseRelease(
+    Effect.suspend(() =>
+      Effect.andThen(
+        ensureLockDir(lock),
+        acquireLock(claimLock(lock), claims).pipe(Effect.uninterruptible),
+      ),
+    ).pipe(Effect.orDie),
+    (held) => (held ? effect : contended),
+    (held) => (held ? releaseOwnLock(lock).pipe(Effect.ignore) : Effect.void),
+  );
+
 // WARNING: Every writer of a Run's files takes it, so two amendments cannot both write.
 export function withDirLock<A, E, R>(
   dir: string,

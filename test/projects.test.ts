@@ -6,6 +6,8 @@ import { ProjectView, TaskView } from "../src/board-model";
 import { frontDoor, socketOf } from "../src/host";
 import { stopHost } from "./support/host";
 import { collie, proves } from "./support/world";
+import { runEffect } from "./support/effect";
+import { twoMachines } from "./support/peers";
 import type { World } from "./support/world";
 const Board = Schema.Struct({ tasks: Schema.Array(TaskView), projects: Schema.Array(ProjectView) });
 const Something = Schema.Struct({ project: Schema.String });
@@ -188,10 +190,17 @@ test("a batch filing answers for every entry, and filing the same batch again ch
         const payments = yield* projectOf(world, "Payments");
         const mine = yield* taskOf(world, "Say a duplicate refunds notice twice");
         const door = yield* frontDoor(socketOf(world.state));
+        const here = Option.getOrThrow(
+          Option.map(
+            Arr.findFirst((yield* boardOf(world)).projects, (one) => one.id === payments),
+            (one) => one.installation,
+          ),
+        );
+        const at = { installation: here, id: payments };
         const entries = [
-          { task: mine, project: payments },
-          { task: "task-elsewhere", installation: "another-installation", project: payments },
-          { task: "task-unknown", project: payments },
+          { task: mine, project: at },
+          { task: "task-elsewhere", installation: "another-installation", project: at },
+          { task: "task-unknown", project: at },
         ];
         const [first] = yield* door.act({
           actions: [{ kind: "task_file", filings: entries }],
@@ -228,4 +237,43 @@ test("a filing into a Project an older host never heard of is refused, and the T
         expect((yield* cardOf(world, mine))?.projectId).toBeNull();
       }),
     [],
+  ));
+
+test("a Project another Machine owns takes a Task, and an absent or archived one leaves it alone", () =>
+  runEffect(
+    twoMachines(
+      "collie-project-away-",
+      (first, second) =>
+        Effect.gen(function* () {
+          yield* first.lists([second]);
+          // WARNING: a command that reaches the far Machine is what pairs the two, and filing uses that route.
+          expect((yield* first.cli(["--machine", "second", "board"])).envelope.ok).toBe(true);
+          const payments = yield* projectOf(second.world, "Payments");
+          const owner = Option.getOrThrow(
+            Option.map(
+              Arr.findFirst((yield* boardOf(second.world)).projects, (one) => one.id === payments),
+              (one) => one.installation,
+            ),
+          );
+          const task = yield* taskOf(first.world, "Say a duplicate refunds notice twice");
+          const away = yield* file(first.world, task, "inst-nowhere:project-payments");
+          expect(away.envelope.error?.message).toContain("unavailable");
+          expect((yield* cardOf(first.world, task))?.projectId).toBeNull();
+          const filed = yield* file(first.world, task, `${owner}:${payments}`);
+          expect(filed.envelope.data).toMatchObject({ result: "filed" });
+          expect((yield* cardOf(first.world, task))?.projectId).toEqual({
+            installation: owner,
+            id: payments,
+          });
+          expect(
+            (yield* collie(second.world, ["project", "archive", "--project", payments])).envelope
+              .ok,
+          ).toBe(true);
+          const other = yield* taskOf(first.world, "Move the payout window");
+          const archived = yield* file(first.world, other, `${owner}:${payments}`);
+          expect(archived.envelope.error?.message).toContain("archived");
+          expect((yield* cardOf(first.world, other))?.projectId).toBeNull();
+        }),
+      [],
+    ),
   ));

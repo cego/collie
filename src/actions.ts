@@ -3,6 +3,7 @@ import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
 import { Effect, Predicate, Result, Schema, Struct } from "effect";
 import { VerifySpecSchema } from "./verify-spec";
+import { ProjectRef as ProjectRefSchema } from "./project";
 import { SavedStart } from "./schedule-model";
 import { stringifyJson } from "./json";
 
@@ -99,8 +100,8 @@ export const ActionSchema = Schema.Union([
         task: Schema.String,
         // WARNING: a qualified entry names the owner it is expected on, so a wrong host refuses it.
         installation: Schema.optionalKey(Schema.String),
-        // WARNING: absent leaves the Task unassigned.
-        project: Schema.optionalKey(Schema.String),
+        // WARNING: absent leaves the Task unassigned; a qualified destination is resolved at its owner.
+        project: Schema.optionalKey(ProjectRefSchema),
         // WARNING: the membership the operator saw; a move that names another loses to the one that won.
         expected: Schema.optionalKey(Schema.Finite),
       }),

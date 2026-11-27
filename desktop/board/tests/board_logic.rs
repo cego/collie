@@ -891,3 +891,32 @@ fn needs_you_counts_a_task_once_however_many_questions_it_carries() {
     )]);
     assert_eq!(needs_of(&machines, &payments()), 1);
 }
+
+#[test]
+fn a_project_holds_the_tasks_filed_into_it_whichever_machine_owns_them() {
+    let membership = json!({"projectId": {"installation": "inst-pc", "id": "project-payments"}});
+    let with = |id: &str| {
+        let mut one = task(id, "active", json!({"name": id}));
+        for (key, value) in membership.as_object().unwrap() {
+            one[key] = value.clone();
+        }
+        one
+    };
+    let (machines, _) = heard(vec![
+        with_projects(
+            vec![with("Refunds")],
+            vec![project("project-payments", "Payments", false, false)],
+        ),
+        snapshot(vm(), vec![with("Payouts")], default_herd()),
+    ]);
+    let inside = scoped(&machines, Some(&payments()), false);
+    assert_eq!(
+        inside
+            .iter()
+            .map(|one| (one.key.as_str(), one.machine.as_str()))
+            .collect::<Vec<_>>(),
+        [("inst-pc:Refunds", "mk-pc"), ("inst-vm:Payouts", "vm-mk")],
+        "a Task on another Machine is in the Project it was filed into, named by its own Machine"
+    );
+    assert!(scoped(&machines, None, false).len() == 2);
+}

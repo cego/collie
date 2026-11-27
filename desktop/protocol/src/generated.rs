@@ -3089,7 +3089,7 @@ pub enum TaskFileTag {
 pub struct Filing {
     pub task: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub project: Option<String>,
+    pub project: Option<ProjectId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected: Option<f64>,
 }

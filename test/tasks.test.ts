@@ -290,6 +290,33 @@ test("two submissions of one create request are one queued Task", () =>
     [],
   ));
 
+test("many copies of one create request arriving together are one Task", () =>
+  proves(
+    "collie-task-together-",
+    (world) =>
+      Effect.gen(function* () {
+        yield* collie(world, ["board"]);
+        const door = yield* frontDoor(socketOf(world.state));
+        const asked = {
+          actions: [{ kind: "create_task", instruction: "Tidy the refunds copy" }],
+          request: "create-together",
+        };
+        const answers = yield* Effect.all(
+          Array.from({ length: 24 }, () => door.act(asked)),
+          { concurrency: "unbounded" },
+        );
+        expect(Arr.map(answers, ([done]) => done?.task)).toHaveLength(24);
+        expect(new Set(Arr.map(answers, ([done]) => done?.state))).toEqual(new Set(["applied"]));
+        expect(new Set(Arr.map(answers, ([done]) => done?.task)).size).toBe(1);
+        const listed = yield* collie(world, ["task", "list"]);
+        const { tasks } = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ tasks: Schema.Array(Schema.Struct({ id: Schema.String })) }),
+        )(listed.envelope.data).pipe(Effect.orDie);
+        expect(Arr.map(tasks, (one) => one.id)).toEqual([answers[0]?.[0]?.task ?? ""]);
+      }),
+    [],
+  ));
+
 test("a queued Task takes one first Run on its chosen checkout, and its card leaves Queued", () =>
   proves(
     "collie-task-start-",

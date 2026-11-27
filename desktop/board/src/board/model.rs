@@ -442,6 +442,8 @@ pub fn project_rows(machines: &[Shown]) -> (Vec<ProjectRow<'_>>, Vec<ProjectRow<
 }
 /// Every Task in `scope`, and following ones only where the operator asked for those: the order
 /// is the board's own, so a Task that moves section moves with it.
+// WARNING: a Task belongs to the Project it names, whichever Machine owns the Task, because a
+// Project may be filed into from another Machine.
 pub fn scoped<'a>(
     machines: &'a [Shown],
     scope: Option<&Scope>,
@@ -451,17 +453,14 @@ pub fn scoped<'a>(
     all.retain(|one| {
         let inside = match scope {
             None => true,
-            Some(scope) => {
-                one.installation == scope.installation
-                    && one
-                        .task
-                        .project_id
-                        .as_ref()
-                        .and_then(|one| one.as_ref())
-                        .is_some_and(|project| {
-                            project.installation == scope.installation && project.id == scope.id
-                        })
-            }
+            Some(scope) => one
+                .task
+                .project_id
+                .as_ref()
+                .and_then(|one| one.as_ref())
+                .is_some_and(|project| {
+                    project.installation == scope.installation && project.id == scope.id
+                }),
         };
         inside && (!following || one.task.following == Some(true))
     });

@@ -2,7 +2,8 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { pipe as pipe_ } from "effect/Function";
-import { Effect, FileSystem, Schema, flow, Result } from "effect";
+import { Effect, FileSystem, Duration, Schema, flow, Result } from "effect";
+import { holdLock } from "./lock";
 import { FrontDoor, RequestConflict, Where } from "./board-model";
 import { voiceOf } from "./proposals";
 import type { Voice } from "./proposals";
@@ -169,8 +170,7 @@ export const recordAudit = Effect.fn("Audit.record")(function* <A, I extends Sch
     : appendJournal(fileOf(runDir), AuditJson, full);
 });
 
-// WARNING: two copies of one request arriving together can both act; a lock per Run would prevent it.
-export const once = Effect.fn("Audit.once")(function* <A, I extends Schema.Json, E, R>(
+const recorded = Effect.fn("Audit.recorded")(function* <A, I extends Schema.Json, E, R>(
   runDir: string,
   line: Voice & {
     readonly operation: string;
@@ -206,4 +206,33 @@ export const once = Effect.fn("Audit.once")(function* <A, I extends Schema.Json,
   const value = yield* act;
   yield* recordAudit(runDir, { ...line, value, requested }).pipe(Effect.orDie);
   return value;
+});
+
+// WARNING: the claim is taken before the audit is read, so copies of one request arriving together act once.
+export const once = Effect.fn("Audit.once")(function* <A, I extends Schema.Json, E, R>(
+  runDir: string,
+  line: Voice & {
+    readonly operation: string;
+    readonly request: string;
+    readonly origin: FrontDoor;
+    readonly from?: Where | undefined;
+    readonly schedule?: ScheduledBy | undefined;
+    readonly reason?: string | undefined;
+    readonly asked?: Schema.Json | undefined;
+    readonly result: Schema.Codec<A, I>;
+  },
+  act: Effect.Effect<A, E, R>,
+) {
+  const claim = `${runDir}/claim-${Str.replaceAll(/[^A-Za-z0-9._-]/g, "_")(line.request)}.lock`;
+  return yield* holdLock(
+    claim,
+    Effect.fail(
+      new RequestConflict({
+        request: line.request,
+        reason: `request "${line.request}" is still being acted on`,
+      }),
+    ),
+    Effect.suspend(() => recorded(runDir, line, act)),
+    Duration.seconds(30),
+  );
 });
