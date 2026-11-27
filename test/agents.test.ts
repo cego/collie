@@ -9603,6 +9603,18 @@ test("a step an older build dispatched with no mode from the Workflow still coll
     }),
   ));
 
+test("a pre-upgrade launch is collected from its file though the Workflow names no mode", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* olderDispatch("r1");
+      yield* rig.queueOutputs([{ verdict: "clean", note: "from the file" }]);
+      const result = yield* session(started("r1"));
+      expect(result._tag).toBe("Success");
+      expect(yield* read(promptPath("r1"))).toContain("OUTPUT_PATH");
+      expect(yield* read(promptPath("r1"))).not.toContain("collie_submit");
+    }),
+  ));
+
 test("a submit that does not decode is answered with every problem, and writes nothing", () =>
   runEffect(
     Effect.gen(function* () {
